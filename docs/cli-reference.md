@@ -12,6 +12,9 @@
 hdc 不在 PATH 时自动尝试 DevEco Studio 默认路径：
 `/Applications/DevEco-Studio.app/Contents/sdk/default/openharmony/toolchains/hdc`
 
+> 设备选择只解决“跟哪台设备通信”；换新手机能否**安装** HAP 取决于签名 profile 白名单，
+> 详见 [docs/device-onboarding.md](device-onboarding.md)。
+
 ## 子命令
 
 ### `br devices`

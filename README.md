@@ -72,7 +72,14 @@ which hvigorw   # 构建工具
 DevEco Studio 打开工程，File → Project Structure → Signing Configs → 自动签名。
 **必须是 debug 签名**（jit prctl 只对 debug 应用开放）。
 
-> 仅 CLI 使用（不修改 App）时无需签名 —— 直接安装预编译的 release HAP 即可。
+debug 签名 profile（`.p7b`）里内嵌了**允许安装的设备 UDID 白名单**：只有登记过的
+手机才能安装本 HAP。DevEco 自动签名会把当前连接的设备 UDID 自动登记进 profile，
+所以**换新手机后必须重新自动签名 + 重新构建**，详见
+[docs/device-onboarding.md](docs/device-onboarding.md)。
+
+> 仅 CLI 使用（不重新构建 App）时无需自己签名 —— 直接安装预编译的
+> `binrunner/data/binrunner.hap` 即可；但它同样受 profile 白名单限制，
+> 只能装在与构建时同一批 UDID 已登记的设备上。
 
 ### 2. 构建安装
 
