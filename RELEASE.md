@@ -1,3 +1,18 @@
+# v1.1.2
+
+## 工程
+
+- **签名材料轮换**：debug 签名换用基于新手机重新自动签名的证书/密钥/profile
+  （`default_app_*`，含新设备 UDID 白名单），仓库 `.github/docker/certs/` 与
+  `app/build-profile.json5` 同步更新。新手机可直接 `br setup` 安装 HAP 并调试
+
+## 文档
+
+- 新增 `docs/device-onboarding.md`：换新手机接入指南（设备发现 vs 签名白名单两层 UDID、
+  换手机 5 步流程、故障排查表）
+- README 第 1 节签名说明修正：debug profile 内嵌设备 UDID 白名单，预编译 HAP
+  同样受白名单限制，换新手机需重新自动签名 + 重建
+
 # v1.1.1
 
 ## 修复
