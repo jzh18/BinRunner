@@ -97,6 +97,13 @@ hvigorw assembleApp --mode project -p product=default -p buildMode=debug --no-da
 hdc install app/entry/build/default/outputs/default/entry-default-signed.hap
 ```
 
+> **App 版本与 Python 包版本联动**：HAP 的 `versionName`/`versionCode` 取自
+> `binrunner/__init__.py` 的 `__version__`（同一处也是 wheel 版本号唯一来源）。
+> `build.sh` 构建 HAP 前自动同步；手动构建时执行
+> `python3 scripts/sync_app_version.py`。`versionCode` 按
+> `major*1_000_000 + minor*1_000 + patch` 映射（1.0.0 → 1000000），
+> 单调递增保证已安装设备可覆盖升级。
+
 ### 3. hdc 触发执行
 
 ```bash

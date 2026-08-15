@@ -38,6 +38,9 @@ bash examples/hello/build.sh
 echo ""
 echo "=== Step 2/3: Build base HAP ==="
 
+# App 版本与 Python 包版本联动：versionName/versionCode 取自 binrunner.__version__
+python3 scripts/sync_app_version.py
+
 # 签名证书（hvigor 在 certpath 父目录下找 material/ 子目录）
 KEY_DIR="$SCRIPT_DIR/.build/keystore"
 CI_CERT_DIR="$SCRIPT_DIR/.github/docker/certs"

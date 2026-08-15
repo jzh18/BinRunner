@@ -52,7 +52,7 @@ binrunner/
 ```toml
 [project]
 name = "binrunner"
-version = "1.0.0"
+dynamic = ["version"]
 description = "Run native Linux binaries on HarmonyOS NEXT retail devices"
 requires-python = ">=3.9"
 dependencies = []
@@ -60,10 +60,14 @@ license = "MIT"
 readme = "README.md"
 
 [project.scripts]
-br = "binrunner.__main__:main"
+br = "binrunner.cli:main"
+
+# 版本号唯一来源：binrunner/__init__.py 的 __version__
+[tool.setuptools.dynamic]
+version = {attr = "binrunner.__version__"}
 
 [tool.setuptools.package-data]
-binrunner = ["data/*.hap"]
+binrunner = ["data/*.hap", "data/hello"]
 ```
 
 ## 自动安装
@@ -86,7 +90,7 @@ def push_file(udid, local, remote, port):
 
 `br version` 未安装时：
 ```
-BinRunner CLI 1.0.0
+BinRunner CLI 1.1.2
 Device HAP   not installed (run `br setup` or any command to auto-install)
 ```
 
@@ -104,8 +108,8 @@ br setup --reinstall             # 强制覆盖升级（保留推送文件）
 
 ```bash
 br version
-# BinRunner CLI 1.0.0
-# Device HAP   1.0.0 (com.example.binrunner)
+# BinRunner CLI 1.1.2
+# Device HAP   1.1.2 (com.example.binrunner)
 ```
 
 ### 其他命令不变
@@ -142,6 +146,23 @@ br run "myapp --flag=value"
 | HAP 升级 | `br setup --reinstall`（保留 filesDir/bin/ 下的用户文件） |
 | 版本检查 | `br version` |
 
+## 版本联动（CLI 与 HAP 同源）
+
+版本号唯一来源是 `binrunner/__init__.py` 的 `__version__`，CLI 与 HAP 同源：
+
+- **CLI**：pyproject.toml 经 `[tool.setuptools.dynamic]` 动态读取 → wheel 版本号
+- **HAP**：`build.sh` 构建 HAP 前调用 `scripts/sync_app_version.py`，把 `__version__`
+  写入 `app/AppScope/app.json5` 的 `versionName`；`versionCode` 按
+  `major*1_000_000 + minor*1_000 + patch` 映射（1.0.0 → 1000000），单调递增保证
+  已安装设备可 `br setup --reinstall` 覆盖升级（回退会直接报错）
+
+`br version` 两侧显示一致：
+
+```
+BinRunner CLI 1.1.2
+Device HAP   1.1.2 (com.example.binrunner)
+```
+
 ## 一键构建
 
 ```bash
@@ -157,11 +178,13 @@ export OHOS_NDK="$DEVECO_SDK_HOME/default/openharmony/native"
 GitHub Actions 工作流: [`.github/workflows/release.yml`](../.github/workflows/release.yml)，`v*` tag push 触发，调用 `./build.sh` 构建后发布 wheel 到 GitHub Release。无需 PyPI token。
 
 构建前先校验 tag（去掉 `v` 前缀）与 `binrunner.__version__` 一致，不一致直接失败
-（防忘升版本号，见 #1）。发版流程：先升 `binrunner/__init__.py` 的 `__version__` 并更新
-`RELEASE.md`，合并后再打 tag。
+（防忘升版本号，见 #1）。`build.sh` 内部还会把 `__version__` 同步为 HAP 的
+`versionName`/`versionCode`（见上节），wheel 与内嵌 HAP 版本永远一致。
+发版流程：先升 `binrunner/__init__.py` 的 `__version__` 并更新 `RELEASE.md`，
+合并后再打 tag。
 
 ```bash
-git tag v1.0.0 && git push origin v1.0.0   # → 自动构建发布
+git tag v1.1.2 && git push origin v1.1.2   # → 自动构建发布
 ```
 
 ## 证书管理
@@ -175,8 +198,9 @@ git tag v1.0.0 && git push origin v1.0.0   # → 自动构建发布
 
 | 文件 | 说明 |
 |---|---|
-| `pyproject.toml` | pip 包元数据 |
-| `binrunner/__init__.py` | 空包声明 |
+| `pyproject.toml` | pip 包元数据（版本动态读取 `binrunner.__version__`） |
+| `binrunner/__init__.py` | 版本号唯一来源（`__version__`） |
+| `scripts/sync_app_version.py` | 版本联动：把 `__version__` 同步到 `app/AppScope/app.json5` |
 | `binrunner/__main__.py` | CLI 全逻辑（`ensure_app` 自动安装、`_find_bundled` 资源查找） |
 | `binrunner/data/` | 内嵌资源（HAP + hello，CI 构建产物，gitignored） |
 | `examples/hello/hello.c` | hello 验证二进制源码 |
