@@ -267,7 +267,9 @@ hdc shell aa start -b com.example.binrunner -a EntryAbility --ps cmd "probe2"
 
 - **hilog 通道带宽**：stdout/stderr 通过 hilog 回传，单条日志约 1000 字符上限。行间加
   微延迟避免 socket 溢出，大输出场景建议走 TCP 回传（见扩展方向）
-- **CPU 推理正常；GPU/NPU delegate 不可用**（App 沙箱无权访问对应驱动/服务）
+- **CPU 推理正常；GPU/NPU 推理未实测**——限制在 MindSpore Lite 尚未适配鸿蒙 OS 的
+  GPU/NPU 驱动（benchmark 只能走 CPU），而非 BinRunner：沙箱内二进制可 dlopen
+  系统 GPU/NPU 驱动库，BinRunner 不限制驱动访问
 - 二进制以 App uid 运行，受 App 沙箱约束（访问不了其他应用数据等）
 - seccomp 存在（Termony 实测 setuid/setgid 会被杀），避免在用例里调用特权 syscall
 

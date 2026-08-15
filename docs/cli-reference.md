@@ -264,7 +264,7 @@ br logs                                         # 实时跟踪，显示所有 Bi
 | hilog 带宽 | stdout/stderr 通过 hilog 回传，单条约 1000 字符上限；大输出走 TCP 回传 |
 | 推送并发 | 同名文件后写覆盖，无锁 |
 | 执行环境 | 二进制以 App uid 运行，受沙箱约束；seccomp 限制部分 syscall |
-| GPU/NPU | 不可用，App 无权访问对应驱动 |
+| GPU/NPU | MindSpore Lite 未适配鸿蒙 GPU/NPU 驱动，实测走 CPU；BinRunner 不限制驱动访问（沙箱内二进制可 dlopen 系统驱动库） |
 | CLI 依赖 | 仅需 Python 3 + hdc（零第三方包），不支持 Windows（hdc 路径硬编码 macOS） |
 | 设备端依赖 | debug 签名（jit prctl），零售机无 root |
 
