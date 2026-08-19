@@ -164,6 +164,8 @@ echo 'alias br="python3 '"$(pwd)"'/binrunner"' >> ~/.zshrc
 - **断点续传**：≥4MiB 的文件中断后重跑同一条 `br push` 会自动续传，只发剩余部分
   （靠头部 4KiB 探针确认同一文件；传输期间用 `.part` 临时名，收满才改成正式名，
   所以正式文件名不会指向半成品）。已实测 32MiB 传到 69% 强杀后续传，哈希与源文件一致。
+- **长传保活**：`br push` 期间自动点亮屏幕 + 巡检 fport 隧道，熄屏挂起 / 隧道被回收
+  导致的中断会自动自愈续传（详见 §7.2 与 [docs/transfer-spec.md §传输可靠性](docs/transfer-spec.md)）
 - 不想用 CLI 时等价的手工步骤：`hdc fport tcp:8888 tcp:8888` + `python3 binrunner push <file或目录>` +
   `aa start --ps cmd ...` + `hilog | grep BinRunner`
 
@@ -205,13 +207,25 @@ PushServer（TCP :8888）天然支持多连接并发。
 
 ### 7. 数据文件（模型等）通路
 
-`/data/local/tmp` App 读不到（SELinux），数据文件三条路：
+`/data/local/tmp` App 读不到（SELinux），数据文件三条路。
 
-1. **打进 HAP rawfile**（本工程示范）：放 `app/entry/src/main/resources/rawfile/`，
-   App 启动时自动释放到 filesDir，cmd 里用 `@/xxx` 引用
-2. **第 4 节的推送通道**（适合大文件/频繁更换）：`br push model.ms`，
-   用 `@/bin/model.ms` 引用
-3. 自建 socket 交互：App 起 server，`hdc fport` 后 PC 直连（见扩展方向）
+#### 7.1 rawfile 打包（本工程示范）
+
+放 `app/entry/src/main/resources/rawfile/`，App 启动时自动释放到 filesDir，
+cmd 里用 `@/xxx` 引用。
+
+#### 7.2 推送通道（适合大文件/频繁更换）
+
+`br push model.ms`，用 `@/bin/model.ms` 引用。
+
+> ⚠️ **已知坑**：屏幕熄灭后 App 进后台，PushServer 的 8888 监听会被系统挂起，
+> `br push` 表现为「连接建立但无响应 / 中途 Connection refused」；hdc fport 隧道
+> 也可能被系统回收但本地端口仍被残留进程占用。已由 CLI 保活线程 + App 前台常亮
+> 双保险缓解，详见 [docs/transfer-spec.md §传输可靠性](docs/transfer-spec.md)。
+
+#### 7.3 自建 socket 交互
+
+App 起 server，`hdc fport` 后 PC 直连（见扩展方向）。
 
 ### 8. 实测：MindSpore Lite 模型推理（已跑通）
 
@@ -270,6 +284,8 @@ hdc shell aa start -b com.example.binrunner -a EntryAbility --ps cmd "probe2"
 - **CPU 推理正常；GPU/NPU 推理未实测**——限制在 MindSpore Lite 尚未适配鸿蒙 OS 的
   GPU/NPU 驱动（benchmark 只能走 CPU），而非 BinRunner：沙箱内二进制可 dlopen
   系统 GPU/NPU 驱动库，BinRunner 不限制驱动访问
+- **熄屏挂起 PushServer**：屏幕熄灭后 App 进后台，8888 监听被系统挂起，长传会中断。
+  `br push` 已内置保活 + 自愈（见 §7.2），App 前台也保持常亮，双保险
 - 二进制以 App uid 运行，受 App 沙箱约束（访问不了其他应用数据等）
 - seccomp 存在（Termony 实测 setuid/setgid 会被杀），避免在用例里调用特权 syscall
 

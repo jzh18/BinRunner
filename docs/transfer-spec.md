@@ -242,9 +242,29 @@ br ls "@/bin"                  # .part 后缀的即为未完成传输
 br rm big-model.bin.part
 ```
 
+### 传输可靠性（保活与自愈）
+
+真机实测的**已知坑**（README §7.2）：屏幕熄灭后 EntryAbility 进后台，PushServer 的
+8888 监听被系统挂起；hdc fport 隧道也可能被系统回收，但本地端口仍被残留进程占用。
+表现为 `br push`「连接建立但无响应 / 中途 Connection refused」。
+
+对抗手段（CLI + App 双保险）：
+
+| 手段 | 位置 | 机制 |
+|---|---|---|
+| 屏幕保活 | `binrunner/keepalive.py` | push 期间后台线程每 10s `power-shell wakeup` 点亮屏幕 |
+| fport 巡检 | `binrunner/keepalive.py` | 每 5s `hdc fport ls` 确认真实规则存在，丢失即 force 重建 |
+| 自愈组合拳 | `binrunner/push.py` | 重试前先 `ensure_forward(force=True)` 重建隧道 + 唤醒屏幕；**首连**失败才重启 App（`aa force-stop` + `aa start`），后续重试保留续传状态不打断 |
+| 前台常亮 | `app/.../EntryAbility.ets` | `setWindowKeepScreenOn(true)`，熄屏兜底 |
+| 连接防泄漏 | `app/.../PushServer.ets` | 活跃连接上限 `MAX_ACTIVE_CONNECTIONS=4`，CLI 重试遗留的未关闭连接直接拒绝，防单线程事件循环被拖垮 |
+
+`ensure_forward(force=True)` 会先 `hdc fport rm` 删旧规则再重建——仅靠本地端口探测
+（`port_open`）会把残留进程占用的端口误判为隧道健康。
+
 ## 幂等性
 
-- `hdc fport` 重复建立无害（`ensure_forward` 检测 `127.0.0.1:8888` 已通则跳过）
+- `hdc fport` 重复建立无害：`ensure_forward` 先经 `hdc fport ls` 确认真实规则，
+  再回退本地端口探测；`force=True` 用于长传自愈时删旧重建（见上节「传输可靠性」）
 - PushServer 收到同名文件直接覆盖（`OpenMode.CREATE | OpenMode.TRUNC`）
 - App 未运行时自动拉 App 后重试一次
 
