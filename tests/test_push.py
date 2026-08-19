@@ -119,9 +119,23 @@ def sent(monkeypatch):
 
 @pytest.fixture
 def no_forward(monkeypatch):
-    """跳过 hdc fport 和 hdc 重试（不需要真实设备/App）。"""
-    monkeypatch.setattr(pushmod, "ensure_forward", lambda *a: None)
+    """跳过 hdc fport、KeepAlive 后台线程和 hdc 重试（不需要真实设备/App）。"""
+    monkeypatch.setattr(pushmod, "ensure_forward", lambda *a, **kw: None)
+    monkeypatch.setattr(pushmod, "wakeup_screen", lambda *a, **kw: None)
+    monkeypatch.setattr(pushmod, "restart_app", lambda *a, **kw: None)
     monkeypatch.setattr(pushmod, "run_hdc", lambda *a, **kw: None)
+
+    class _NullKeepAlive:
+        def __init__(self, *a, **kw):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return None
+
+    monkeypatch.setattr(pushmod, "KeepAlive", _NullKeepAlive)
 
 
 def unpack(packet):
@@ -250,19 +264,27 @@ class TestSendRetry:
             return FakeSocket([])
 
         monkeypatch.setattr(pushmod.socket, "create_connection", flaky_connect)
-        monkeypatch.setattr(pushmod, "run_hdc", lambda *a, **kw: launched.append(a))
+        # 自愈组合拳全部 mock 掉：确保 forward / wakeup / restart 各调一次
+        monkeypatch.setattr(pushmod, "ensure_forward", lambda *a, **kw: None)
+        monkeypatch.setattr(pushmod, "wakeup_screen", lambda *a, **kw: launched.append(1))
+        monkeypatch.setattr(pushmod, "restart_app", lambda *a, **kw: launched.append(2))
+        monkeypatch.setattr(pushmod, "run_hdc", lambda *a, **kw: None)
         monkeypatch.setattr(pushmod.time, "sleep", lambda _: None)
 
         pushmod._send_file(8888, "hello", b"data", "UDID")
 
         assert len(attempts) == 2, "应重试一次"
-        assert launched, "重试前应尝试拉起 App"
+        assert launched, "重试前应执行自愈（wakeup + 重启 App）"
+        assert 1 in launched and 2 in launched, "应同时唤醒屏幕并重启 App"
 
     def test_exits_when_both_attempts_fail(self, monkeypatch):
         def always_fail(*a, **kw):
             raise OSError("connection refused")
 
         monkeypatch.setattr(pushmod.socket, "create_connection", always_fail)
+        monkeypatch.setattr(pushmod, "ensure_forward", lambda *a, **kw: None)
+        monkeypatch.setattr(pushmod, "wakeup_screen", lambda *a, **kw: None)
+        monkeypatch.setattr(pushmod, "restart_app", lambda *a, **kw: None)
         monkeypatch.setattr(pushmod, "run_hdc", lambda *a, **kw: None)
         monkeypatch.setattr(pushmod.time, "sleep", lambda _: None)
 

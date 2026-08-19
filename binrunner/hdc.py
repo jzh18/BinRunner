@@ -98,15 +98,34 @@ def port_open(port: int) -> bool:
         return False
 
 
-def ensure_forward(udid: str, port: int) -> None:
+def _forward_rule(udid: str, port: int) -> str:
+    return f"tcp:{port} tcp:{port}"
+
+
+def _forward_listed(udid: str, port: int) -> bool:
+    """用 `hdc fport ls` 确认真实转发规则存在（本地端口探测可能误判）。"""
+    try:
+        p = run_hdc(udid, "fport", "ls", check=False, timeout=10)
+        return _forward_rule(udid, port) in p.stdout
+    except Exception:
+        return False
+
+
+def ensure_forward(udid: str, port: int, force: bool = False) -> None:
     """建立 hdc fport 转发，幂等。
 
     fport 是前台进程，故以脱离会话的后台进程驻留（start_new_session）。
+    长传输出错（Connection refused 等）时以 force=True 重建 —— 隧道可能
+    被系统回收但本地端口仍被残留进程占用，仅靠 port_open 会误判为健康。
     """
-    if port_open(port):
+    if not force and (_forward_listed(udid, port) or port_open(port)):
         return
+    if force:
+        # 先删旧规则再重建，避免残留规则与新隧道打架
+        run_hdc(udid, "fport", "rm", _forward_rule(udid, port), check=False, timeout=10)
+        time.sleep(0.2)
     subprocess.Popen(
-        hdc_cmd(udid, "fport", f"tcp:{port}", f"tcp:{port}"),
+        hdc_cmd(udid, "fport", "tcp:{0}".format(port), "tcp:{0}".format(port)),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         start_new_session=True,
@@ -116,3 +135,16 @@ def ensure_forward(udid: str, port: int) -> None:
             return
         time.sleep(0.1)
     sys.exit(f"hdc fport 建立失败（127.0.0.1:{port} 一直连不上）")
+
+
+def wakeup_screen(udid: str) -> None:
+    """点亮屏幕。屏幕熄灭后 BinRunner 的 EntryAbility 进后台，8888 监听
+    被系统挂起（doc §7.2 记录的已知坑），推送前/推送中需要保持屏幕常亮。"""
+    run_hdc(udid, "shell", "power-shell wakeup", check=False, timeout=10)
+
+
+def restart_app(udid: str, bundle: str, ability: str) -> None:
+    """强制重启设备侧 App。多次失败协商后 PushServer 可能卡死，
+    重启 App 是兜底手段（实测有效）。"""
+    run_hdc(udid, "shell", f"aa force-stop {bundle}", check=False, timeout=10)
+    run_hdc(udid, "shell", f"aa start -b {bundle} -a {ability}", check=False, timeout=10)

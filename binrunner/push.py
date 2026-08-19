@@ -51,7 +51,8 @@ from binrunner.config import (
     RESUME_MIN_SIZE,
     RESUME_PROBE_BYTES,
 )
-from binrunner.hdc import ensure_forward, run_hdc
+from binrunner.hdc import ensure_forward, restart_app, run_hdc, wakeup_screen
+from binrunner.keepalive import KeepAlive
 
 # 连接与重试参数
 _CONNECT_TIMEOUT = 10
@@ -141,17 +142,20 @@ def _fmt_size(n: int) -> str:
 
 
 def _read_ack(sock, acked: int) -> int:
-    """读一个 u64 ACK，返回设备已落盘总量。连接断开或超时即报错退出。
+    """读一个 u64 ACK，返回设备已落盘总量。
 
     设备可能把多个 ACK 合并在一个 TCP 段里；只取最后一个完整的即可，
     因为 ACK 是累计值而非增量。
+
+    超时抛 TimeoutError（OSError 子类）而非直接退出 —— 调用方的
+    _send_stream 重试循环据此重建 fport/唤醒/重启 App 后续传。
     """
     buf = b""
     while len(buf) < 8:
         try:
             data = sock.recv(8 - len(buf))
         except socket.timeout:
-            sys.exit(
+            raise TimeoutError(
                 f"等待设备确认超时（已确认 {_fmt_size(acked)}，"
                 f"{ACK_TIMEOUT:.0f}s 无响应）；设备侧可能卡住或 App 被杀"
             )
@@ -267,6 +271,7 @@ def _send_stream(port: int, name: str, opener, size: int, udid: str) -> None:
     validate_remote(name, size)
     launched = False
     last_acked = 0
+    last_reason = ""
 
     for attempt in range(1, RESUME_MAX_ATTEMPTS + 1):
         try:
@@ -279,9 +284,15 @@ def _send_stream(port: int, name: str, opener, size: int, udid: str) -> None:
         except OSError as e:
             acked = 0
             reason = str(e)
+            last_reason = reason
+            # 自愈组合拳：重建 fport（隧道可能被回收）+ 点亮屏幕（避免 App
+            # 进后台挂起监听）+ 拉起 App。三者缺一不可 —— 只拉起 App 而
+            # 隧道已断仍会 Connection refused。首连失败才重启 App（保留
+            # 续传状态）；后续重试只重建隧道 + 唤醒，避免反复重启打断续传。
+            ensure_forward(udid, port, force=True)
+            wakeup_screen(udid)
             if not launched:
-                # 转发通了但 App 没监听（被系统杀掉等）→ 拉起 App
-                run_hdc(udid, "shell", f"aa start -b {BUNDLE} -a {ABILITY}", check=False)
+                restart_app(udid, BUNDLE, ABILITY)
                 time.sleep(_APP_LAUNCH_WAIT)
                 launched = True
                 continue  # 拉起后立即重试，不计入退避
@@ -300,7 +311,7 @@ def _send_stream(port: int, name: str, opener, size: int, udid: str) -> None:
     sys.exit(
         f"推送失败：{name} 在 {RESUME_MAX_ATTEMPTS} 次尝试后仍未完成\n"
         f"（最后进度 {_fmt_size(last_acked)}/{_fmt_size(size)}；"
-        f"检查 App 是否存活、hdc fport 是否正常）"
+        f"最后一次原因：{last_reason or '未知'}）"
     )
 
 
@@ -319,8 +330,8 @@ def _push_local_file(udid: str, local: str, remote: str, port: int) -> None:
 
 def push_file(udid: str, local: str, remote: str, port: int) -> None:
     """推送单个文件到 filesDir/bin/<remote>。"""
-    ensure_forward(udid, port)
-    _push_local_file(udid, local, remote, port)
+    with KeepAlive(udid, port):
+        _push_local_file(udid, local, remote, port)
 
 
 def collect_tree(local_dir: str) -> list[tuple[str, str]]:
@@ -339,12 +350,12 @@ def collect_tree(local_dir: str) -> list[tuple[str, str]]:
 
 def push_tree(udid: str, local_dir: str, port: int) -> None:
     """递归推送目录树到 filesDir/bin/，保持子目录结构。"""
-    ensure_forward(udid, port)
     files = collect_tree(local_dir)
     if not files:
         print(f"目录为空: {local_dir}")
         return
     print(f"推送 {len(files)} 个文件...")
-    for full, rel in files:
-        # 走流式路径：大文件不驻留内存，且中断可续传
-        _push_local_file(udid, full, rel, port)
+    with KeepAlive(udid, port):
+        for full, rel in files:
+            # 走流式路径：大文件不驻留内存，且中断可续传
+            _push_local_file(udid, full, rel, port)

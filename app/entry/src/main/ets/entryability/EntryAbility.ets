@@ -85,6 +85,13 @@ export default class EntryAbility extends UIAbility {
   }
 
   onWindowStageCreate(windowStage: window.WindowStage): void {
+    // App 在前台时保持屏幕常亮 —— 屏幕熄灭会令 EntryAbility 进后台、
+    // PushServer 的 8888 监听被系统挂起（doc §7.2 记录的坑）。CLI 侧
+    // 的 keepalive 唤醒作为后台/熄屏时的兜底，双保险。
+    windowStage.getMainWindowSync().setWindowKeepScreenOn(true)
+      .catch((e: Error) => {
+        hilog.warn(DOMAIN, TAG, 'setWindowKeepScreenOn failed: %{public}s', JSON.stringify(e));
+      });
     windowStage.loadContent('pages/Index', (err) => {
       if (err.code) {
         hilog.error(DOMAIN, TAG, 'loadContent failed: %{public}s', JSON.stringify(err));

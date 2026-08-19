@@ -200,6 +200,7 @@ class TestEnsureForward:
 
     def test_skips_when_port_already_open(self, monkeypatch):
         monkeypatch.setattr(hdcmod, "port_open", lambda _: True)
+        monkeypatch.setattr(hdcmod, "_forward_listed", lambda *a: True)
         spawned = []
         monkeypatch.setattr(
             hdcmod.subprocess, "Popen", lambda *a, **kw: spawned.append(a)
@@ -210,6 +211,7 @@ class TestEnsureForward:
     def test_spawns_detached_when_port_closed(self, monkeypatch, stub_hdc_path):
         states = iter([False, True])  # 首次探测失败，建立后成功
         monkeypatch.setattr(hdcmod, "port_open", lambda _: next(states, True))
+        monkeypatch.setattr(hdcmod, "_forward_listed", lambda *a: False)
         spawned = []
         monkeypatch.setattr(
             hdcmod.subprocess, "Popen", lambda *a, **kw: spawned.append(kw)

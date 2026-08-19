@@ -12,6 +12,8 @@ const PULL_MAGIC = 0x4c4c5550;
 const PULL_CHUNK = 262144;
 /** 单文件上限 1GiB，与 CLI 侧 config.MAX_FILE_SIZE 保持一致 */
 const MAX_FILE_SIZE = 1073741824;
+/** 活跃连接上限：CLI 重试可能留下未关闭连接，超限拒绝新连接 */
+const MAX_ACTIVE_CONNECTIONS = 4;
 /** 远端名上限（字节），与 CLI 侧 MAX_REMOTE_NAME_BYTES 一致 */
 const MAX_NAME_BYTES = 256;
 /** 协议头最小长度：u32 nameLen + u64 payloadSize */
@@ -77,6 +79,8 @@ enum RecvState {
  */
 export class PushServer {
   private static server: socket.TCPSocketServer | null = null;
+  /** 活跃连接数（防泄漏上限 MAX_ACTIVE_CONNECTIONS） */
+  private static activeConnections = 0;
   /** 接收目录（EntryAbility 初始化为 filesDir + '/bin'） */
   static recvDir: string = '';
   static readonly PORT = 8888;
@@ -210,6 +214,19 @@ export class PushServer {
   }
 
   private static handleClient(client: socket.TCPSocketConnection): void {
+    // 连接防泄漏：CLI 重试会建新连接，若旧连接因异常未关闭而累积，
+    // 单线程事件循环会被拖垮。超限时直接拒绝新连接（CLI 侧会重试）。
+    if (PushServer.activeConnections >= MAX_ACTIVE_CONNECTIONS) {
+      hilog.warn(DOMAIN, TAG, 'push: too many active connections (%{public}d), rejecting',
+        PushServer.activeConnections);
+      try {
+        client.close();
+      } catch (e) {
+        hilog.warn(DOMAIN, TAG, 'push: close rejected client failed: %{public}s', JSON.stringify(e));
+      }
+      return;
+    }
+    PushServer.activeConnections++;
     let state: RecvState = RecvState.HEADER;
     // 仅在 HEADER 阶段用于攒头部字节，进入 BODY 后即释放
     let headerChunks: ArrayBuffer[] = [];
@@ -499,6 +516,7 @@ export class PushServer {
     });
 
     client.on('close', () => {
+      PushServer.activeConnections = Math.max(0, PushServer.activeConnections - 1);
       if (state === RecvState.DONE) {
         hilog.info(DOMAIN, TAG, 'push %{public}s: OK %{public}s (%{public}d bytes)',
           remote, name, expectedSize);
