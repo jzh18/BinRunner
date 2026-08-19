@@ -1,3 +1,38 @@
+# v1.2.0
+
+## 新特性
+
+- **`br push` 保活与自愈**（对抗熄屏挂起与 fport 隧道回收）：
+  - 屏幕熄灭后 EntryAbility 进后台，PushServer 的 8888 监听被系统挂起，长传表现为
+    连接建立但无响应 / 中途 Connection refused → CLI 保活线程（`keepalive.py`）
+    每 10s `power-shell wakeup` 点亮屏幕；App 前台 `setWindowKeepScreenOn(true)`
+    常亮，双保险
+  - hdc fport 隧道可能被系统回收，但本地端口仍被残留进程占用 → 每 5s
+    `hdc fport ls` 巡检确认真实规则，丢失即 `ensure_forward(force=True)`
+    删旧重建
+  - 失败重试改「自愈组合拳」：重建隧道 + 唤醒屏幕 + **首连**失败才重启 App
+    （后续重试保留续传状态不打断）；`_read_ack` 超时改抛 `TimeoutError` 供续传
+  - PushServer 活跃连接上限 4：拒绝 CLI 重试遗留的未关闭连接，防单线程事件循环被拖垮
+- **App 版本与 Python 包版本联动**：
+  - 新增 `scripts/sync_app_version.py`，`build.sh` 构建 HAP 前把 `__version__`
+    同步到 `app/AppScope/app.json5`（`versionName` + `versionCode` 单调递增映射）
+  - 修复「包 1.1.2 但 App 报 1.0.0」的版本错位，本次 App 版本 1.2.0 / 1002000
+
+## 修复
+
+- **GPU/NPU 限制归因修正**：BinRunner 不限制 GPU/NPU 驱动访问（沙箱内二进制可 dlopen
+  系统驱动库），实测只能走 CPU 是 MindSpore Lite 尚未适配鸿蒙 OS 的 GPU/NPU 驱动
+
+## 工程
+
+- 单测 **125 个全绿**（test_hdc / test_push 覆盖保活、自愈组合拳新逻辑）
+
+## 文档
+
+- README §7.2 记录「熄屏挂起 PushServer」已知坑与双保险缓解
+- `docs/transfer-spec.md` 新增「传输可靠性（保活与自愈）」章节
+- `docs/release-packaging.md` 版本联动说明；GPU/NPU 限制修正同步至 README 与 cli-reference
+
 # v1.1.2
 
 ## 工程

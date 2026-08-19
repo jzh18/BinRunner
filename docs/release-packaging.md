@@ -184,7 +184,7 @@ GitHub Actions 工作流: [`.github/workflows/release.yml`](../.github/workflows
 合并后再打 tag。
 
 ```bash
-git tag v1.1.2 && git push origin v1.1.2   # → 自动构建发布
+git tag v1.2.0 && git push origin v1.2.0   # → 自动构建发布
 ```
 
 ## 证书管理
