@@ -10,7 +10,6 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository_owner }}/binrunner-sdk
 
 jobs:
   build:
@@ -18,8 +17,19 @@ jobs:
     permissions:
       contents: read
       packages: write
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
     steps:
       - uses: actions/checkout@v4
+
+      # ghcr 镜像名必须全小写：owner（如 Yiklek）需转小写
+      - name: Compute lowercase image name
+        id: meta
+        run: |
+          OWNER_LC="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
+          IMAGE="${{ env.REGISTRY }}/${OWNER_LC}/binrunner-sdk"
+          echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
+          echo "IMAGE_NAME=${IMAGE}" >> "$GITHUB_ENV"
 
       - name: Log in to ghcr.io
         uses: docker/login-action@v3
@@ -36,5 +46,5 @@ jobs:
             CMD_TOOLS_URL=${{ inputs.cmd_tools_url }}
           push: true
           tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.run_id }}
+            ${{ env.IMAGE_NAME }}:latest
+            ${{ env.IMAGE_NAME }}:${{ github.run_id }}

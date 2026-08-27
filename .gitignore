@@ -39,3 +39,8 @@ binrunner.egg-info/
 binrunner/data/binrunner.hap
 binrunner/data/hello
 *.whl
+
+# 签名私钥（脱敏：经 GitHub Secrets 注入，不入库）
+.github/docker/certs/
+*.p12
+*.p7b
