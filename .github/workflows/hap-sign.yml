@@ -194,20 +194,11 @@ jobs:
           path: binrunner-signed.hap
 
       # nightly release：main push / 定时构建时，把签名+未签名 HAP 滚动发布到 `nightly` prerelease。
-      # softprops/action-gh-release 对已存在的 release 只替换 asset/正文、不刷新时间戳，
-      # 因此先用 REST API 删旧 release + tag，再让 softprops 以当前 commit 重建（时间戳更新）。
-      - name: Reset nightly release (delete old release & tag)
-        if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'schedule'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          API="https://api.github.com/repos/${{ github.repository }}"
-          curl -s -X DELETE -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Accept: application/vnd.github+json" "$API/releases/tags/nightly" || true
-          curl -s -X DELETE -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Accept: application/vnd.github+json" "$API/git/refs/tags/nightly" || true
-          echo "old nightly release/tag removed (if existed)"
-
+      # 用 softprops 的「更新模式」而非「先删后建」：release 不存在则创建，已存在则原地更新
+      # assets（同名 asset 会被替换，新 asset 的时间戳 = 当次构建时间）与正文。
+      # 这避免了「先删 release/tag 再重建」的竞态（release 删除是最终一致的，会导致
+      # 只剩孤立 tag、没有 release、下载包丢失的僵尸状态）。
+      # 注意：Release 自身的 published_at 不会刷新（停在首次创建），但 asset 文件时间戳会更新。
       - name: Publish rolling nightly release
         if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'schedule'
         uses: softprops/action-gh-release@v2
@@ -215,6 +206,8 @@ jobs:
           tag_name: nightly
           name: Nightly Build
           prerelease: true
+          update_release_body: true
+          update_release_assets: true
           files: |
             binrunner-signed.hap
             binrunner-unsigned.hap
