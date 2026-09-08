@@ -1,4 +1,27 @@
+# v1.3.0
+
+## 新特性
+
+- **可配置设备端执行超时**（#3/#6，jzh18）：`br run --timeout` 把秒数下传设备
+  （`timeout_sec`），设备侧 `BinRunner.run` 按 int32 校验后设执行期限，不再固定 30s；
+  主机端在超时外另留 30s 报告回传宽限。规避“设备已超时被杀但 CLI 空等/误判超时”
+  的错位
+- **CI 签名迁往 Secrets + nightly 归档**：
+  - `.github/docker/certs/` 自签材料移出仓库，私钥/Profile/证书（`BINRUNNER_*`）
+    全部改经 GitHub Secrets 注入，仓库不落可安装私钥明文
+  - 新增 `hap-sign.yml`：main push / `v*` tag / 定时 / 手动触发构建并签名 HAP，
+    main 与定时构建滚动更新 `nightly` prerelease（signed + unsigned 两个下载包）
+  - 新增 `build-sdk-image.yml`：一次性构建预装 Command Line Tools + SDK 的容器镜像
+  - `release.yml` 打通签名 Secret，`v*` tag 时 wheel 内置签名 HAP
+  - `build.sh` 支持 Secrets base64 还原签名材料；新增 `scripts/sign-hap.sh`
+    自助签名入口
+
+## 工程
+
+- 单测 143 个全绿（test_runner 新增设备执行超时/参数校验覆盖）
+
 # v1.2.0
+
 
 ## 新特性
 

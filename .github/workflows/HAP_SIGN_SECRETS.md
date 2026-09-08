@@ -1,7 +1,8 @@
 # HAP 构建 & 签名（GitHub Actions）脱敏说明
 
-`Yiklek/BinRunner` 的 HAP 构建 + 签名已封装为
-[`.github/workflows/hap-sign.yml`](.github/workflows/hap-sign.yml)。
+`vincentzhu007/BinRunner` 的 HAP 构建 + 签名已封装为
+[`.github/workflows/hap-sign.yml`](.github/workflows/hap-sign.yml)，版本 wheel 发布由
+[`.github/workflows/release.yml`](.github/workflows/release.yml) 完成；两条工作流共用本节 Secrets。
 
 ## 安全模型（脱敏）
 
@@ -232,8 +233,12 @@ flowchart LR
 
 ## 触发方式
 
-- 手动：Actions 页 → **HAP Build & Sign** → Run workflow
-- 推 tag：`git push origin v1.2.0`
+- 推送 `main`：触发 **Test** 和 **HAP Build & Sign**；后者将签名/未签名 HAP 更新至
+  `nightly` prerelease，不创建版本 wheel Release。
+- 手动：Actions 页 → **HAP Build & Sign** → Run workflow，只上传 HAP workflow artifact。
+- 推版本 tag（例如 `git push origin v1.2.0`）：同时触发 **HAP Build & Sign** 和
+  **Release**；Release 使用本节 Secrets 构建带签名 HAP 的 wheel，上传 artifact 并创建
+  GitHub Release。tag 去掉 `v` 后必须与 `binrunner.__version__` 完全一致。
 
 ## 产物
 

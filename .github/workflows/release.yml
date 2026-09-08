@@ -31,6 +31,13 @@ jobs:
           fi
 
       - name: Build wheel
+        env:
+          BINRUNNER_KEYSTORE_B64: ${{ secrets.BINRUNNER_KEYSTORE_B64 }}
+          BINRUNNER_PROFILE_B64: ${{ secrets.BINRUNNER_PROFILE_B64 }}
+          BINRUNNER_CERT_B64: ${{ secrets.BINRUNNER_CERT_B64 }}
+          KEYSTORE_PWD: ${{ secrets.BINRUNNER_KEYSTORE_PWD }}
+          KEY_ALIAS: ${{ secrets.BINRUNNER_KEY_ALIAS }}
+          KEY_PWD: ${{ secrets.BINRUNNER_KEY_PWD }}
         run: |
           # 确保 SDK toolchain 在 PATH（setup-python 可能覆盖容器 PATH）
           export PATH="/opt/command-line-tools/bin:/opt/command-line-tools/hvigor/bin:/opt/harmonyos-sdk/default/openharmony/native/llvm/bin:/opt/harmonyos-sdk/default/openharmony/toolchains:$PATH"
