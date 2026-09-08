@@ -28,7 +28,8 @@ CLI 代码里**零硬编码 UDID**，每次执行都实时探测在线设备：
 因此 HAP 必须 debug 签名（release 签名装得上也跑不了二进制）。
 
 HarmonyOS NEXT 的 debug 签名 profile（`.p7b` 文件）里**内嵌了允许安装的设备 UDID 白名单**：
-只有登记过的手机才能安装该 HAP。
+只有登记过的手机才能安装该 HAP。当前 CI 调试 Profile 白名单的设备 UDID 登记在
+[`docs/supported-device-udids.json`](supported-device-udids.json)（与签名用 `.p7b` 保持一致）。
 
 - 本地签名材料：`app/build-profile.json5` → `~/.ohos/config/default_*.p7b`
   （DevEco Studio 自动签名产物，文件名带随机后缀）
@@ -51,6 +52,9 @@ HarmonyOS NEXT 的 debug 签名 profile（`.p7b` 文件）里**内嵌了允许�
    `hvigorw assembleApp --mode project -p product=default -p buildMode=debug --no-daemon`。
 5. **安装验证**：`br setup --reinstall`（首次则 `br setup`），
    它会安装 HAP、推送 `hello` 并执行，验证 安装→推送→执行 全链路。
+6. **同步白名单登记**：把新 `.p7b` 的 device-ids 同步到
+   [`docs/supported-device-udids.json`](supported-device-udids.json)，并更新 CI Secrets
+   里的 `BINRUNNER_PROFILE_B64`（见 `.github/workflows/HAP_SIGN_SECRETS.md`「换新测试设备怎么办」）。
 
 ## 常见故障排查
 

@@ -179,7 +179,10 @@ HTTP `201`（新建）/ `204`（覆盖）均成功。PAT 需要 classic `repo` �
 Profile 的设备白名单在 AGC 签发时固定。新设备装不上（`UDID not in profile`）时：
 1. AGC → Profile → 编辑该调试 Profile → **加入新设备 UDID** → 重新下载 `.p7b`；
 2. 更新 Secret `BINRUNNER_PROFILE_B64`（其余不变）；
-3. 重跑 HAP Build & Sign，用新产出的 HAP 安装。
+3. 把新 `.p7b` 的 `device-ids` 同步到仓库
+   [`docs/supported-device-udids.json`](../../docs/supported-device-udids.json)
+   （设备 UDID 清单的仓库内登记，含现网全部已登记设备）；
+4. 重跑 HAP Build & Sign，用新产出的 HAP 安装。
 
 > 区分**调试/发布证书**：发布证书签的包不能装真机调试；CI 里应全程使用
 > **调试证书 + 调试 Profile**。
