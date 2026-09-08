@@ -17,7 +17,7 @@ v2（续传，首字段为 RESUME_MAGIC）：
 设备把传输中的数据写在 <name>.part，收满才原子 rename 为正式名 ——
 故正式名下不会出现半成品，中断的 .part 供下次续传。
 
-payload 分块流式发送，不在内存中拼装完整封包 —— 支持至 1GiB 的文件。
+payload 分块流式发送，不在内存中拼装完整封包 —— 支持至 4GiB 的文件。
 设备侧同样流式落盘（见 app/entry/src/main/ets/common/PushServer.ets）。
 
 发送受 ACK 流控：在途字节超过 MAX_INFLIGHT_BYTES 就等设备确认。

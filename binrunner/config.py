@@ -22,9 +22,10 @@ DEVECO_HDC = "/Applications/DevEco-Studio.app/Contents/sdk/default/openharmony/t
 # 远端文件名上限（字节数，与 PushServer.ets 的 nameLen 校验一致）
 MAX_REMOTE_NAME_BYTES = 256
 
-# 单文件推送上限 1GiB。双端均为流式处理不占大内存，此限制用于挡住误操作
-# （如误推整个镜像），需与 PushServer.ets 的 MAX_FILE_SIZE 保持一致。
-MAX_FILE_SIZE = 1 << 30
+# 单文件推送上限 4GiB（#5）。双端均为流式处理不占大内存，此限制用于挡住误操作
+# （如误推整个镜像）；仍需与 PushServer.ets 的 MAX_FILE_SIZE 保持一致。
+# 设备剩余空间小于文件大小时，会在写盘中 ENOSPC 失败并清理 .part。
+MAX_FILE_SIZE = 4 << 30
 
 # 流式发送的分块大小。256KiB 兼顾 syscall 次数与内存占用：
 # 设备侧 TCP 接收缓冲有限，单次 send 过大会长时间阻塞。

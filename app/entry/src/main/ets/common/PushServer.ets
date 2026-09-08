@@ -10,8 +10,8 @@ const TAG = 'BinRunner';
 const PULL_MAGIC = 0x4c4c5550;
 /** PULL 回传分块大小 */
 const PULL_CHUNK = 262144;
-/** 单文件上限 1GiB，与 CLI 侧 config.MAX_FILE_SIZE 保持一致 */
-const MAX_FILE_SIZE = 1073741824;
+/** 单文件上限 4GiB（4 * 2^30，与 CLI 侧 config.MAX_FILE_SIZE 保持一致） */
+const MAX_FILE_SIZE = 4294967296;
 /** 活跃连接上限：CLI 重试可能留下未关闭连接，超限拒绝新连接 */
 const MAX_ACTIVE_CONNECTIONS = 4;
 /** 远端名上限（字节），与 CLI 侧 MAX_REMOTE_NAME_BYTES 一致 */
@@ -49,7 +49,7 @@ const MIN_HEADER_V2_BYTES = 20;
  * 接收状态机。
  *
  * 流式落盘的关键：header 到齐即打开文件，后续 message 事件直接写盘，
- * 不在内存里累积 payload —— 否则 1GB 文件会 OOM。
+ * 不在内存里累积 payload —— 否则数 GiB 文件会 OOM。
  */
 enum RecvState {
   HEADER,   // 头部未收齐，继续在内存里攒
@@ -75,7 +75,7 @@ enum RecvState {
  *   PC → 设备:  payload 自 resumeFrom 起的剩余部分
  *
  * 两版都以 u64 累计 ACK 做流控（每 ACK_INTERVAL 字节一个）。
- * payload 流式写盘，支持至 1GiB 的文件。PC 端见 binrunner/push.py。
+ * payload 流式写盘，支持至 4GiB 的文件。PC 端见 binrunner/push.py。
  */
 export class PushServer {
   private static server: socket.TCPSocketServer | null = null;
