@@ -39,6 +39,14 @@ hdc 不在 PATH 时自动尝试 DevEco Studio 默认安装路径。
 _NEEDS_APP = {"push", "run", "ls", "rm", "logs", "pull"}
 
 
+def _execution_timeout(value: str) -> int:
+    """设备 native 接口使用正 int32 秒数。"""
+    seconds = int(value)
+    if not 1 <= seconds <= 2147483647:
+        raise argparse.ArgumentTypeError("执行超时必须为 1–2147483647 的整数秒")
+    return seconds
+
+
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
         prog="br",
@@ -73,7 +81,10 @@ def build_parser() -> argparse.ArgumentParser:
         "cmdline",
         help='完整命令行，如 "benchmark --modelFile=@/m.ms"（@ = 沙箱 files 根）',
     )
-    p_run.add_argument("--timeout", type=int, default=60, help="等待输出的秒数（默认 60）")
+    p_run.add_argument(
+        "--timeout", type=_execution_timeout, default=60,
+        help="设备执行超时秒数（正整数，默认 60）；主机额外等待 30 秒供启动和报告回传",
+    )
 
     p_ls = sub.add_parser("ls", help="列出设备目录（默认 files 根目录）")
     p_ls.add_argument("path", nargs="?", help='设备侧路径，如 "@" 或 "@/bin"')
