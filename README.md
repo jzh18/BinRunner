@@ -136,12 +136,22 @@ br push ./benchmark                             # 推送二进制（自动建立
 br push ./libmindspore-lite.so                  # 动态依赖库推进同一目录
 br push ./mylibs/                               # 递归推送目录（保持子目录结构）
 br run "benchmark --modelFile=@/mobilenetv2.ms --loopCount=5"
+br run --timeout 1800 "benchmark --modelFile=@/mobilenetv2.ms --loopCount=1000"
 # → stdout/stderr 直接打印到本地终端，二进制退出码透传为 CLI 退出码
 br ls                                           # 列出 files 根目录（bin/ 子目录是推送区；加路径可列任意目录）
 br rm "old-binary"                               # 删除已推送的文件或目录（递归）
 br pull "hello"                                  # 从设备拉取文件到本地
 br logs                                         # 持续跟踪设备日志
 ```
+
+`br run --timeout` 设置**设备端执行期限**（默认 60 秒，范围 1–2147483647 整数秒）；
+主机从启动请求返回后最多等待该期限加 30 秒，用于启动、调度和报告回传。
+例如 `--timeout 1800` 允许设备执行 1800 秒，主机等待上限为 1830 秒。
+报告包含实际执行期限，如 `exit=-1 timedOut=true timeoutSec=1800`。
+主机等待报告超时只表示未收到完整报告，不能据此确定设备是否已结束。
+此修复需要同时更新 CLI 和设备 HAP；仅更新 CLI 时，旧 v1.2.0 HAP 仍会在 30 秒终止任务。
+从源码构建后请安装新 HAP（使用打包的 CLI 时执行 `br setup --reinstall`）。
+直接使用 `aa start` 时可加 `--ps timeout_sec 1800`；未传入时（包括页面执行）保留 30 秒默认值。
 
 持久化（追加到 `~/.zshrc` 或 `~/.bashrc`）：
 

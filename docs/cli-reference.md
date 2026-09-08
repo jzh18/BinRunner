@@ -139,7 +139,19 @@ br ls "@/bin"                                   # 推送文件目录
 | 参数 | 必需 | 说明 |
 |---|---|---|
 | `cmdline` | ✅ | 命令行字符串。第一个词是二进制名或绝对路径，其余为参数 |
-| `--timeout` | 否（默认 60s） | 等待输出的秒数，超时后强制返回 |
+| `--timeout` | 否（默认 60s） | 设备端执行期限，1–2147483647 整数秒；主机额外等待 30 秒供启动、调度和报告回传 |
+
+例如 `br run --timeout 1800 "benchmark --modelFile=@/mobilenetv2.ms --loopCount=1000"`
+将 `timeout_sec=1800` 随启动参数传至设备，native 执行超时后以 SIGKILL 终止子进程。
+报告首行包含实际执行期限：`exit=-1 timedOut=true timeoutSec=1800`；正常完成也包含 `timeoutSec`。
+主机从启动请求返回后使用单调时钟计算等待上限（本例为 1830 秒），等待报告超时会返回 1，
+并分别显示设备执行期限和额外预留时间；这不表示设备一定已被终止，也不会主动取消设备任务。
+
+CLI 和设备 HAP 必须同时更新。旧 v1.2.0 HAP 会忽略新参数，仍在 30 秒后终止任务；
+构建后安装修复后的 HAP，使用打包 CLI 时可通过 `br setup --reinstall` 覆盖安装。
+手工启动可用 `aa start ... --ps timeout_sec 1800 --ps cmd ...`。
+设备未收到 `timeout_sec` 时默认 30 秒，以兼容旧 CLI 和页面调用；非法值会输出 `exit=1`
+错误报告且不执行命令。超时参数按每次请求独立保存，并发执行互不覆盖。
 
 **名字解析顺序**：绝对路径直通 → `filesDir/bin/<name>`（推送目录） → `libs/arm64/lib<name>.so`（打包目录）
 

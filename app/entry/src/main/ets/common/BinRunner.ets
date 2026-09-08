@@ -60,8 +60,9 @@ export class BinRunner {
    * 执行一条命令，例如 run('hello foo bar') 会执行 libhello.so 并传入 ['foo', 'bar']。
    * 返回完整报告文本，同时分段写入 hilog（tag = BinRunner）。
    * @param runId 可选执行 ID，多终端并发时用于区分输出（CLI 自动生成）。
+   * @param timeoutSec 设备执行期限（正 int32 秒数）；未传入时保持 30 秒。
    */
-  static async run(cmdLine: string, runId: string = ''): Promise<string> {
+  static async run(cmdLine: string, runId: string = '', timeoutSec: number = 30): Promise<string> {
     const parts = cmdLine.split(/\s+/).filter((s) => s.length > 0)
       .map((t) => expandHome(t, BinRunner.filesDir));
     if (parts.length === 0) {
@@ -75,15 +76,17 @@ export class BinRunner {
 
     let report: string;
     // 隐藏命令：ls [path]（默认沙箱 files 根目录，推送的二进制在 bin/ 子目录），列目录到 host CLI
-    if (name === 'ls') {
+    if (!Number.isInteger(timeoutSec) || timeoutSec < 1 || timeoutSec > 2147483647) {
+      report = 'exit=1\ninvalid timeout_sec: expected an integer between 1 and 2147483647 seconds';
+    } else if (name === 'ls') {
       report = BinRunner.listDir(args[0] ?? BinRunner.filesDir);
     } else if (name === 'rm') {
       // 隐藏命令：rm <path> — 删除 filesDir 下的文件或目录
       report = BinRunner.removePath(args[0] ?? '');
     } else {
       try {
-        const r: RunResult = await runBin(BinRunner.binDir, name, args, 30, BinRunner.filesBinDir);
-        report = `exit=${r.exitCode} timedOut=${r.timedOut}\n` +
+        const r: RunResult = await runBin(BinRunner.binDir, name, args, timeoutSec, BinRunner.filesBinDir);
+        report = `exit=${r.exitCode} timedOut=${r.timedOut} timeoutSec=${timeoutSec}\n` +
           `--- stdout ---\n${r.stdout}\n--- stderr ---\n${r.stderr}`;
       } catch (e) {
         report = `native call failed: ${JSON.stringify(e)}`;

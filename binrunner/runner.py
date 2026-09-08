@@ -20,8 +20,10 @@ from binrunner.hilog import parse_exit_code, parse_output, report_is_complete
 _STARTUP_WAIT = 1.0
 # 轮询间隔
 _POLL_INTERVAL = 0.5
-# 单次 hilog -x 的最小超时
-_MIN_POLL_TIMEOUT = 5
+# 启动、调度及报告回传的额外等待时间
+_REPORT_GRACE = 30
+# 单次 hilog -x 的最大超时
+_MAX_POLL_TIMEOUT = 5
 # br logs 的轮询间隔
 _LOGS_INTERVAL = 1
 
@@ -40,7 +42,9 @@ def _dump_hilog(udid: str, timeout: float) -> str:
 
 
 def cmd_run(udid: str, cmdline: str, timeout: int) -> int:
-    """在设备上执行命令，打印报告，返回目标二进制的退出码。"""
+    """执行期限为 timeout 秒；主机另留报告回传时间，返回目标退出码。"""
+    if not isinstance(timeout, int) or isinstance(timeout, bool) or not 1 <= timeout <= 2147483647:
+        raise ValueError("执行超时必须为 1–2147483647 的整数秒")
     run_id = new_run_id()
 
     # 清掉旧日志，避免上次执行的报告混入（失败无妨，>>> exec 标记会兜底）
@@ -48,7 +52,8 @@ def cmd_run(udid: str, cmdline: str, timeout: int) -> int:
     run_hdc(
         udid,
         "shell",
-        f"aa start -b {BUNDLE} -a {ABILITY} --ps run_id {run_id} --ps cmd '{cmdline}'",
+        f"aa start -b {BUNDLE} -a {ABILITY} --ps run_id {run_id} "
+        f"--ps timeout_sec {timeout} --ps cmd '{cmdline}'",
     )
 
     started = False
@@ -56,23 +61,31 @@ def cmd_run(udid: str, cmdline: str, timeout: int) -> int:
     report_lines: list[str] = []
     parts: dict[int, str] = {}  # 超长行的 [i/n] 分段缓存，跨轮次复用
 
-    deadline = time.time() + timeout
+    wait_timeout = timeout + _REPORT_GRACE
+    deadline = time.monotonic() + wait_timeout
     time.sleep(_STARTUP_WAIT)
 
     while not done:
-        remain = deadline - time.time()
+        remain = deadline - time.monotonic()
         if remain <= 0:
-            print(f"[binrunner] 等待输出超时（{timeout}s）", file=sys.stderr)
+            print(
+                f"[binrunner] 等待执行报告超时（{wait_timeout}s；设备执行期限 {timeout}s，"
+                f"启动和报告预留 {_REPORT_GRACE}s），设备是否已结束未知",
+                file=sys.stderr,
+            )
             return 1
 
-        output = _dump_hilog(udid, max(remain, _MIN_POLL_TIMEOUT))
+        try:
+            output = _dump_hilog(udid, min(remain, _MAX_POLL_TIMEOUT))
+        except subprocess.TimeoutExpired:
+            continue
         started, done = parse_output(output, started, report_lines, parts, run_id)
         if done:
             break
         # <<< END 可能被 hilog socket 丢弃 → 用报告结构完整性兜底
         if started and report_is_complete(report_lines):
             break
-        time.sleep(_POLL_INTERVAL)
+        time.sleep(min(_POLL_INTERVAL, max(0, deadline - time.monotonic())))
 
     if not done and not report_lines:
         print(

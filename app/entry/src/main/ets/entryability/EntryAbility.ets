@@ -76,10 +76,13 @@ export default class EntryAbility extends UIAbility {
       return;
     }
     const runId = (want?.parameters?.run_id as string | undefined) ?? '';
+    const timeoutParam = want?.parameters?.timeout_sec;
+    // 旧 CLI / 手工启动未传参数时保留 30 秒；每次 Want 独立捕获，避免并发串值。
+    const timeoutSec = timeoutParam === undefined ? 30 : Number(timeoutParam);
     AppStorage.setOrCreate('lastCmd', cmd);
     // 延迟执行，让页面先加载完，避免冷启动时阻塞首帧
     setTimeout(async () => {
-      const output = await BinRunner.run(cmd, runId);
+      const output = await BinRunner.run(cmd, runId, timeoutSec);
       AppStorage.setOrCreate('output', output);
     }, 300);
   }
