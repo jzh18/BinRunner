@@ -1,0 +1,218 @@
+name: HAP Build & Sign
+
+# 在 Yiklek/BinRunner 上构建并签名 BinRunner HAP（com.example.binrunner）。
+#
+# 安全设计（脱敏）：
+#   - 签名私钥 / profile / 证书 / 密码一律经 GitHub Secrets 注入，仓库不落任何私钥明文。
+#   - 流程：hvigor 构建「未签名」HAP → 用 hap-sign-tool + Secrets 证书「签名」。
+#     未签名 HAP 不包含签名信息，可安全提交/分发；只有签名产物才含白名单 profile。
+#   - CI 运行器是临时的，私钥只在 job 内还原，不会提交回仓库。
+#
+# 所需 Secrets（仓库 Settings → Secrets and variables → Actions）：
+#   BINRUNNER_KEYSTORE_B64  debug.p12 的 base64（签名私钥库）
+#   BINRUNNER_PROFILE_B64   debug.p7b  的 base64（签名 profile，含 device-ids 白名单）
+#   BINRUNNER_CERT_B64      debug.cer  的 base64（app 证书 / 根 CA 链）
+#   BINRUNNER_KEYSTORE_PWD  keystore 密码
+#   BINRUNNER_KEY_ALIAS     keystore 私钥别名（如 debugKey）
+#   BINRUNNER_KEY_PWD       key 密码
+#   BINRUNNER_SIGN_ALG      签名算法，默认 SHA256withECDSA
+#
+# 用法：
+#   1. 先运行 build-sdk-image.yml 推送 SDK 镜像（或已有 ghcr.io/<owner>/binrunner-sdk）。
+#   2. 配置上述 Secrets。
+#   3. 推 main（构建并把 HAP 发到 nightly release）/ 推 tag v* / 手动触发。
+#   4. 从 nightly release 或 run artifacts 下载 binrunner-signed.hap，
+#      用 `bm install` 装到白名单设备。
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    tags: ['v*']
+  schedule:
+    # 每天北京时间 02:00（UTC 18:00）nightly 构建
+    - cron: '0 18 * * *'
+
+env:
+  REGISTRY: ghcr.io
+
+# 容器内默认 shell 是 sh（不支持 pipefail），统一用 bash
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # ghcr 镜像名必须全小写：owner（如 Yiklek）转小写后拼接镜像名
+  prepare:
+    runs-on: ubuntu-22.04
+    outputs:
+      sdk_image: ${{ steps.meta.outputs.sdk_image }}
+    steps:
+      - name: Compute lowercase SDK image & verify it exists
+        id: meta
+        run: |
+          set -euo pipefail
+          OWNER_LC="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
+          IMAGE="${{ env.REGISTRY }}/${OWNER_LC}/binrunner-sdk"
+          echo "sdk_image=${IMAGE}:latest" >> "$GITHUB_OUTPUT"
+          echo "SDK image: ${IMAGE}:latest"
+          # 验证镜像已存在（先跑 build-sdk-image.yml），否则 container job 会静默失败
+          TOKEN=$(curl -s "https://ghcr.io/token?scope=repository:${OWNER_LC}/binrunner-sdk:pull" | python3 -c "import sys,json; print(json.load(sys.stdin).get('token',''))")
+          CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${TOKEN}" "https://ghcr.io/v2/${OWNER_LC}/binrunner-sdk/tags/list")
+          if [ "$CODE" != "200" ]; then
+            echo "::error::SDK 镜像 ${IMAGE}:latest 不存在（ghcr HTTP ${CODE}）。请先在 Actions 页运行 build-sdk-image.yml 构建并推送 SDK 镜像，再触发本 workflow。"
+            exit 1
+          fi
+          echo "image exists, OK"
+
+  build-and-sign:
+    needs: prepare
+    runs-on: ubuntu-22.04
+    container:
+      image: ${{ needs.prepare.outputs.sdk_image }}
+    permissions:
+      # nightly release 需要 write
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Ensure SDK toolchain on PATH
+        run: |
+          export PATH="/opt/command-line-tools/bin:/opt/command-line-tools/hvigor/bin:/opt/harmonyos-sdk/default/openharmony/native/llvm/bin:/opt/harmonyos-sdk/default/openharmony/toolchains:$PATH"
+          echo "PATH=$PATH"
+          which hvigorw aarch64-unknown-linux-ohos-clang hap-sign-tool || true
+          find /opt -name 'hap-sign-tool.jar' 2>/dev/null | head
+
+      # ---------------------------------------------------------------
+      # 1) 从 Secrets 还原签名证书（脱敏关键：不提交任何私钥）
+      # ---------------------------------------------------------------
+      - name: Restore signing material from secrets
+        env:
+          # secrets 必须显式映射为 env，shell 才能用 ${!var} 间接读取
+          BINRUNNER_KEYSTORE_B64: ${{ secrets.BINRUNNER_KEYSTORE_B64 }}
+          BINRUNNER_PROFILE_B64: ${{ secrets.BINRUNNER_PROFILE_B64 }}
+          BINRUNNER_CERT_B64: ${{ secrets.BINRUNNER_CERT_B64 }}
+        run: |
+          set -euo pipefail
+          KEY_DIR="$PWD/.build/keystore"
+          mkdir -p "$KEY_DIR" "$KEY_DIR/material"
+          for spec in \
+            "BINRUNNER_KEYSTORE_B64|debug.p12" \
+            "BINRUNNER_PROFILE_B64|debug.p7b" \
+            "BINRUNNER_CERT_B64|debug.cer"; do
+            var="${spec%%|*}"; file="${spec##*|}"
+            val="${!var:-}"
+            if [ -z "$val" ]; then
+              echo "::error::Secret $var is not set"
+              exit 1
+            fi
+            # 清洗粘贴带入的换行/空白（macOS base64 或网页复制的折行）
+            val="$(printf '%s' "$val" | tr -d ' \t\r\n')"
+            if ! printf '%s' "$val" | base64 -d > "$KEY_DIR/$file" 2>/dev/null; then
+              echo "::error::Secret $var 不是合法 base64（清洗后长度 ${#val}）。"
+              echo "请重新生成单行 base64：base64 -w0 <文件>（macOS: base64 <文件> | tr -d '\n'），整段粘贴到 Secret。"
+              exit 1
+            fi
+            if [ ! -s "$KEY_DIR/$file" ]; then
+              echo "::error::Secret $var 解码后为空文件"
+              exit 1
+            fi
+            echo "$var → $file: base64 长度 ${#val}，解码后 $(stat -c%s "$KEY_DIR/$file") bytes"
+          done
+          cp "$KEY_DIR"/debug.* "$KEY_DIR/material/" 2>/dev/null || true
+          chmod 600 "$KEY_DIR"/*.p12
+          echo "signing material restored"
+
+      # ---------------------------------------------------------------
+      # 2) 构建未签名 HAP（hvigor 产 unsigned，不触发签名）
+      #    清空 signingConfigs，hvigor 只打包不签名（缩进安全：不用 heredoc）
+      # ---------------------------------------------------------------
+      - name: Build unsigned HAP
+        run: |
+          export PATH="/opt/command-line-tools/bin:/opt/command-line-tools/hvigor/bin:/opt/harmonyos-sdk/default/openharmony/native/llvm/bin:/opt/harmonyos-sdk/default/openharmony/toolchains:$PATH"
+          cd app
+          ohpm install --all
+          python3 -c "import re; s=open('build-profile.json5').read(); s=re.sub(r'\"signingConfigs\"\s*:\s*\[.*?\]', '\"signingConfigs\": []', s, flags=re.S); s=re.sub(r'\s*\"signingConfig\"\s*:\s*\"[^\"]*\",?', '', s); open('build-profile.json5','w').write(s); print('signingConfigs cleared -> unsigned HAP')"
+          hvigorw assembleApp --mode project -p product=default -p buildMode=debug --no-daemon
+          cd "$OLDPWD"
+          ls -la app/entry/build/default/outputs/default/*unsigned.hap
+
+      # ---------------------------------------------------------------
+      # 3) 用 hap-sign-tool + Secrets 签名
+      # ---------------------------------------------------------------
+      - name: Sign HAP with hap-sign-tool
+        env:
+          # 全部 secrets 走 env：避免内联被 shell 再解释（密码含 $/引号 时会破坏命令或泄露）
+          SIGN_ALG: ${{ secrets.BINRUNNER_SIGN_ALG }}
+          KEY_ALIAS: ${{ secrets.BINRUNNER_KEY_ALIAS }}
+          KEY_PWD: ${{ secrets.BINRUNNER_KEY_PWD }}
+          KEYSTORE_PWD: ${{ secrets.BINRUNNER_KEYSTORE_PWD }}
+        run: |
+          set -euo pipefail
+          UNSIGNED=app/entry/build/default/outputs/default/entry-default-unsigned.hap
+          OUT=binrunner-signed.hap
+          HAP_SIGN_TOOL=$(find /opt -name 'hap-sign-tool.jar' 2>/dev/null | head -1)
+          echo "hap-sign-tool: $HAP_SIGN_TOOL"
+          java -jar "$HAP_SIGN_TOOL" sign-app \
+            -mode localSign \
+            -keyAlias "$KEY_ALIAS" \
+            -keyPwd "$KEY_PWD" \
+            -appCertFile .build/keystore/debug.cer \
+            -profileFile .build/keystore/debug.p7b \
+            -profileSigned 1 \
+            -inFile "$UNSIGNED" \
+            -signAlg "${SIGN_ALG:-SHA256withECDSA}" \
+            -keystoreFile .build/keystore/debug.p12 \
+            -keystorePwd "$KEYSTORE_PWD" \
+            -outFile "$OUT" \
+            -compatibleVersion 8 \
+            -signCode 1
+          echo "signed: $OUT"
+          unzip -l "$OUT" >/dev/null && echo "valid zip"
+
+      # 归档两个 HAP：unsigned（未签名，可自行签名分发）+ signed（可直接安装）
+      - name: Stage HAP artifacts
+        run: |
+          set -euo pipefail
+          cp app/entry/build/default/outputs/default/entry-default-unsigned.hap binrunner-unsigned.hap
+          ls -la binrunner-*.hap
+
+      - name: Upload unsigned HAP artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: binrunner-unsigned-hap
+          path: binrunner-unsigned.hap
+
+      - name: Upload signed HAP artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: binrunner-signed-hap
+          path: binrunner-signed.hap
+
+      # nightly release：main push / 定时构建时，把签名+未签名 HAP 滚动发布到 `nightly` prerelease。
+      # 用 softprops 的「更新模式」而非「先删后建」：release 不存在则创建，已存在则原地更新
+      # assets（同名 asset 会被替换，新 asset 的时间戳 = 当次构建时间）与正文。
+      # 这避免了「先删 release/tag 再重建」的竞态（release 删除是最终一致的，会导致
+      # 只剩孤立 tag、没有 release、下载包丢失的僵尸状态）。
+      # 注意：Release 自身的 published_at 不会刷新（停在首次创建），但 asset 文件时间戳会更新。
+      - name: Publish rolling nightly release
+        if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'schedule'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: nightly
+          name: Nightly Build
+          prerelease: true
+          update_release_body: true
+          update_release_assets: true
+          files: |
+            binrunner-signed.hap
+            binrunner-unsigned.hap
+          body: |
+            Automated BinRunner HAP build from ${{ github.ref_name }} @ ${{ github.sha }}
+
+            - `binrunner-signed.hap` — 已签名，可直接 `bm install -p binrunner-signed.hap` 安装到 Profile 白名单设备。
+            - `binrunner-unsigned.hap` — 未签名，可用自己的证书/Profile 自行签名后安装。
