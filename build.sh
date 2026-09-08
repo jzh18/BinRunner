@@ -82,14 +82,15 @@ fi
 STORE_PWD="${KEYSTORE_PWD:-}"
 KEY_ALIAS_INJ="${KEY_ALIAS:-}"
 KEY_PWD_INJ="${KEY_PWD:-}"
-SED_ARGS="-e s|\"certpath\": \".*\"|\"certpath\": \"$KEY_DIR/debug.cer\"|"
-SED_ARGS="$SED_ARGS -e s|\"profile\": \".*\"|\"profile\": \"$KEY_DIR/debug.p7b\"|"
-SED_ARGS="$SED_ARGS -e s|\"storeFile\": \".*\"|\"storeFile\": \"$KEY_DIR/debug.p12\"|"
-if [ -n "$STORE_PWD" ]; then SED_ARGS="$SED_ARGS -e s|\"storePassword\": \".*\"|\"storePassword\": \"$STORE_PWD\"|"; fi
-if [ -n "$KEY_ALIAS_INJ" ]; then SED_ARGS="$SED_ARGS -e s|\"keyAlias\": \".*\"|\"keyAlias\": \"$KEY_ALIAS_INJ\"|"; fi
-if [ -n "$KEY_PWD_INJ" ]; then SED_ARGS="$SED_ARGS -e s|\"keyPassword\": \".*\"|\"keyPassword\": \"$KEY_PWD_INJ\"|"; fi
-# shellcheck disable=SC2086
-sed -i.bak $SED_ARGS app/build-profile.json5
+SED_ARGS=(
+  -e "s|\"certpath\": \".*\"|\"certpath\": \"$KEY_DIR/debug.cer\"|"
+  -e "s|\"profile\": \".*\"|\"profile\": \"$KEY_DIR/debug.p7b\"|"
+  -e "s|\"storeFile\": \".*\"|\"storeFile\": \"$KEY_DIR/debug.p12\"|"
+)
+[ -n "$STORE_PWD" ] && SED_ARGS+=(-e "s|\"storePassword\": \".*\"|\"storePassword\": \"$STORE_PWD\"|")
+[ -n "$KEY_ALIAS_INJ" ] && SED_ARGS+=(-e "s|\"keyAlias\": \".*\"|\"keyAlias\": \"$KEY_ALIAS_INJ\"|")
+[ -n "$KEY_PWD_INJ" ] && SED_ARGS+=(-e "s|\"keyPassword\": \".*\"|\"keyPassword\": \"$KEY_PWD_INJ\"|")
+sed -i.bak "${SED_ARGS[@]}" app/build-profile.json5
 
 rm -f app/entry/libs/arm64-v8a/libbenchmark.so
 rm -f app/entry/libs/arm64-v8a/libmindspore-lite.so
