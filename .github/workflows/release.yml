@@ -51,8 +51,27 @@ jobs:
           name: binrunner-wheel
           path: dist/*.whl
 
+      - name: Extract current-version section as release body
+        # RELEASE.md 是累计变更记录（含历史版本）；Release 正文只取顶部当前版本一节，
+        # 到下一个 '# vX.Y.Z' 版本标题为止，避免把全部历史描述塞进单个 Release。
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          lines = Path('RELEASE.md').read_text(encoding='utf-8').splitlines(keepends=True)
+          body, seen_version_heading = [], False
+          for line in lines:
+              if line.startswith('# '):
+                  if seen_version_heading:
+                      break
+                  seen_version_heading = True
+              if seen_version_heading:
+                  body.append(line)
+          Path('release-body.md').write_text(''.join(body), encoding='utf-8')
+          PY
+          head -n 1 release-body.md
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*.whl
-          body_path: RELEASE.md
+          body_path: release-body.md
