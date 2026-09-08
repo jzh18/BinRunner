@@ -78,19 +78,53 @@ if [ ! -f "$KEY_DIR/debug.p12" ]; then
   echo "debug certificate: $KEY_DIR"
 fi
 
-# 更新签名路径 + 密码（密码/别名经环境变量注入，避免明文入库）
+# 签名方式分流：
+#   CI/发布（有 Secrets，真实短密码）→ 清空 signingConfigs 让 hvigor 产「未签名 HAP」，
+#     再改用 hap-sign-tool 签名（hap-sign-tool 接受任意长度密码；hvigor 内嵌签名要求
+#     storePassword/keyPassword ≥32 字符或 DevEco 加密串，注入短明文会报 00303116）。
+#   本地（无 Secrets）→ 保留 build-profile 的 signingConfigs，走 hvigor 内嵌签名
+#     （openssl 回退自签用的就是 32 字符密码，见上方 PASS）。
 STORE_PWD="${KEYSTORE_PWD:-}"
 KEY_ALIAS_INJ="${KEY_ALIAS:-}"
-KEY_PWD_INJ="${KEY_PWD:-}"
-SED_ARGS=(
-  -e "s|\"certpath\": \".*\"|\"certpath\": \"$KEY_DIR/debug.cer\"|"
-  -e "s|\"profile\": \".*\"|\"profile\": \"$KEY_DIR/debug.p7b\"|"
-  -e "s|\"storeFile\": \".*\"|\"storeFile\": \"$KEY_DIR/debug.p12\"|"
-)
-[ -n "$STORE_PWD" ] && SED_ARGS+=(-e "s|\"storePassword\": \".*\"|\"storePassword\": \"$STORE_PWD\"|")
-[ -n "$KEY_ALIAS_INJ" ] && SED_ARGS+=(-e "s|\"keyAlias\": \".*\"|\"keyAlias\": \"$KEY_ALIAS_INJ\"|")
-[ -n "$KEY_PWD_INJ" ] && SED_ARGS+=(-e "s|\"keyPassword\": \".*\"|\"keyPassword\": \"$KEY_PWD_INJ\"|")
-sed -i.bak "${SED_ARGS[@]}" app/build-profile.json5
+KEY_PWD_INJ="${KEY_PWD:-$STORE_PWD}"
+
+CI_SIGN=0
+if [ -n "${BINRUNNER_KEYSTORE_B64:-}" ] && [ -n "${BINRUNNER_PROFILE_B64:-}" ] \
+   && [ -n "${BINRUNNER_CERT_B64:-}" ] && [ -n "$STORE_PWD" ]; then
+  CI_SIGN=1
+  echo "CI 签名模式：构建未签名 HAP，随后用 hap-sign-tool 签名"
+  python3 - <<'PYEOF'
+import re
+from pathlib import Path
+p = Path("app/build-profile.json5")
+s = p.read_text(encoding="utf-8")
+s = re.sub(r'"signingConfigs"\s*:\s*\[.*?\]', '"signingConfigs": []', s, flags=re.S)
+s = re.sub(r'\s*"signingConfig"\s*:\s*"[^"]*",?', '', s)
+p.write_text(s, encoding="utf-8")
+PYEOF
+  HAP_SIGN_TOOL="${HAP_SIGN_TOOL:-}"
+  if [ -z "$HAP_SIGN_TOOL" ] && [ -n "$DEVECO_SDK_HOME" ]; then
+    HAP_SIGN_TOOL="$DEVECO_SDK_HOME/default/openharmony/toolchains/lib/hap-sign-tool.jar"
+  fi
+  if [ -z "$HAP_SIGN_TOOL" ] || [ ! -f "$HAP_SIGN_TOOL" ]; then
+    HAP_SIGN_TOOL=$(find /opt "$SCRIPT_DIR" -name hap-sign-tool.jar 2>/dev/null | head -n 1 || true)
+  fi
+  if [ -z "$HAP_SIGN_TOOL" ] || [ ! -f "$HAP_SIGN_TOOL" ]; then
+    echo "未找到 hap-sign-tool.jar（可设 HAP_SIGN_TOOL 指定）" >&2
+    exit 1
+  fi
+  echo "hap-sign-tool: $HAP_SIGN_TOOL"
+else
+  SED_ARGS=(
+    -e "s|\"certpath\": \".*\"|\"certpath\": \"$KEY_DIR/debug.cer\"|"
+    -e "s|\"profile\": \".*\"|\"profile\": \"$KEY_DIR/debug.p7b\"|"
+    -e "s|\"storeFile\": \".*\"|\"storeFile\": \"$KEY_DIR/debug.p12\"|"
+  )
+  [ -n "$STORE_PWD" ] && SED_ARGS+=(-e "s|\"storePassword\": \".*\"|\"storePassword\": \"$STORE_PWD\"|")
+  [ -n "$KEY_ALIAS_INJ" ] && SED_ARGS+=(-e "s|\"keyAlias\": \".*\"|\"keyAlias\": \"$KEY_ALIAS_INJ\"|")
+  [ -n "$KEY_PWD_INJ" ] && SED_ARGS+=(-e "s|\"keyPassword\": \".*\"|\"keyPassword\": \"$KEY_PWD_INJ\"|")
+  sed -i.bak "${SED_ARGS[@]}" app/build-profile.json5
+fi
 
 rm -f app/entry/libs/arm64-v8a/libbenchmark.so
 rm -f app/entry/libs/arm64-v8a/libmindspore-lite.so
@@ -98,10 +132,34 @@ rm -f app/entry/src/main/resources/rawfile/mobilenetv2.ms
 cd app
 ohpm install --all
 hvigorw assembleApp --mode project -p product=default -p buildMode=debug --no-daemon
-cd "$SCRIPT_DIR"
 
-# 恢复原签名路径
-mv app/build-profile.json5.bak app/build-profile.json5
+if [ "$CI_SIGN" -eq 1 ]; then
+  # hvigor 产出的是未签名 HAP，这里用 Secrets 还原的证书/Profile 签名。
+  # 输出沿用 hvigor 的 entry-default-signed.hap 命名，Step 3 复制逻辑不变。
+  echo "=== CI 签名（hap-sign-tool）==="
+  UNSIGNED=entry/build/default/outputs/default/entry-default-unsigned.hap
+  SIGNED_OUT=entry/build/default/outputs/default/entry-default-signed.hap
+  [ -f "$UNSIGNED" ] || { echo "未找到未签名 HAP: $UNSIGNED" >&2; exit 1; }
+  java -jar "$HAP_SIGN_TOOL" sign-app \
+    -mode localSign \
+    -keyAlias "$KEY_ALIAS_INJ" \
+    -keyPwd "$KEY_PWD_INJ" \
+    -appCertFile "$SCRIPT_DIR/.build/keystore/debug.cer" \
+    -profileFile "$SCRIPT_DIR/.build/keystore/debug.p7b" \
+    -profileSigned 1 \
+    -inFile "$UNSIGNED" \
+    -signAlg "${SIGN_ALG:-SHA256withECDSA}" \
+    -keystoreFile "$SCRIPT_DIR/.build/keystore/debug.p12" \
+    -keystorePwd "$STORE_PWD" \
+    -outFile "$SIGNED_OUT" \
+    -compatibleVersion 8 \
+    -signCode 1
+  echo "CI 签名完成：$SIGNED_OUT"
+else
+  # 本地：恢复原签名路径
+  mv app/build-profile.json5.bak app/build-profile.json5
+fi
+cd "$SCRIPT_DIR"
 
 echo ""
 echo "=== Step 3/3: Copy artifacts & build wheel ==="
