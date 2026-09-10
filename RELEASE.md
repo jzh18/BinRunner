@@ -1,3 +1,39 @@
+# v1.4.0
+
+## 新特性
+
+- **流式输出手机端日志**（#12，jzh18）：`br run` 不再等进程退出才回传，执行期间持续显示
+  stdout/stderr
+  - 设备侧：native 工作线程每从管道读到数据即发 `[run_id] STREAM <seq> <stdout|stderr> <hex>`，
+    每块最多 400 原始字节、十六进制编码（避免换行/控制字符/日志截断破坏协议），块间 2ms 节流
+  - Host 侧：启动等待后每 0.5 秒 `hilog -x` 轮询（实际延迟另加 hdc 耗时），按序号重组去重、
+    UTF-8 增量解码，立即写入对应 stdout/stderr 并 flush；无换行片段也会显示
+  - 结束时仅回传 `exit=… streamChunks=N` 状态行（写入 Host stderr），不重复打印已显示的日志；
+    收齐总块数与最终状态即可结束，允许 `<<< END` 丢失
+  - 缺块时继续轮询至 `--timeout` 加 30s 报告预留期，提示「输出数据不完整」并返回失败，
+    已显示的输出保留
+  - `br run` 不再执行全局 `hilog -r`，避免清掉其他并发会话的日志
+  - 兼容：新版 CLI × 旧 App 回退完整报告；旧 CLI 未传 `stream=1` 时新版 App 也发完整报告；
+    `ls` / `rm` / probe 保留原报告形式。目标程序自身缓冲仍需自刷
+    （C `fflush(stdout)`、Python `-u`）
+- **单文件推送上限 1GiB → 4GiB**（#5）：`br push` / `br pull` 的策略护栏放宽到 4GiB
+  （双端常量一致：`binrunner/config.py` 与 `PushServer.ets`，含等值放行）。拒绝语义不变
+  （`size > MAX_FILE_SIZE` 才拒绝），设备空间不足仍走 ENOSPC 失败路径清理 `.part`。
+  决策记录见 [docs/adr/0001](docs/adr/0001-single-file-size-cap-4gib.md)
+
+## 工程
+
+- 单测 **155 个全绿**：新增 `tests/test_streaming.py` 10 个（流式时序、乱序重组、缺块失败、
+  `<<< END` 丢失、UTF-8 跨块、run_id 隔离），`test_runner` 补流式下的超时与报告宽限覆盖
+- `release.yml` Release 正文只取 RELEASE.md 顶部当前版本一节，不再把全部历史贴进每个 Release
+
+## 文档
+
+- README §5 增补「流式输出」、§7.2 标注 4GiB 上限；`docs/cli-reference.md` 新增
+  [流式输出协议](docs/cli-reference.md#流式输出协议)；`docs/concurrency-spec.md` 补流式补充章节
+- `docs/transfer-spec.md` 单文件上限同步为 4GiB；新增 `docs/transfer-glossary.md`
+  与 ADR-0001
+
 # v1.3.0
 
 ## 新特性

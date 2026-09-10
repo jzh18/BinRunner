@@ -233,6 +233,9 @@ cmd 里用 `@/xxx` 引用。
 
 `br push model.ms`，用 `@/bin/model.ms` 引用。
 
+单文件上限 **4GiB**（策略护栏，双端常量一致；决策见 [ADR-0001](docs/adr/0001-single-file-size-cap-4gib.md)），
+设备剩余空间不足会在写盘中报错并清理 `.part`。
+
 > ⚠️ **已知坑**：屏幕熄灭后 App 进后台，PushServer 的 8888 监听会被系统挂起，
 > `br push` 表现为「连接建立但无响应 / 中途 Connection refused」；hdc fport 隧道
 > 也可能被系统回收但本地端口仍被残留进程占用。已由 CLI 保活线程 + App 前台常亮
