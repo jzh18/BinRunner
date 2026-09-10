@@ -198,6 +198,11 @@ PushServer（TCP :8888）天然支持多连接并发。
 ```
 
 - **进程隔离**：每条 `br run` 独立 fork 子进程，各自运行目标二进制，互不影响
+- **流式输出**：新版 CLI 与 App 配合使用时，`br run` 在任务执行期间持续显示 stdout/stderr，
+  分别写入 Host 的标准输出/标准错误并立即刷新；启动后按 0.5 秒间隔轮询（另加 hdc 耗时）。
+  结束时仅在 stderr 打印退出状态，不重复打印日志。目标程序需主动刷新自身缓冲区
+  （例如 C 的 `fflush(stdout)` 或 Python 的 `-u`）；BinRunner 无法读取尚未写入管道的数据。
+  旧版 App 仍使用执行结束后的完整报告。协议与限制见 [CLI 文档](docs/cli-reference.md#流式输出协议)。
 - **输出隔离**：自动生成的 run_id 标记所有日志行，CLI 自动过滤
 - **Push 并发**：多个 `br push` 可同时进行，同名文件后写覆盖
 - 详见 [docs/concurrency-spec.md](docs/concurrency-spec.md)
@@ -289,8 +294,9 @@ hdc shell aa start -b com.example.binrunner -a EntryAbility --ps cmd "probe2"
 
 ## 已知限制
 
-- **hilog 通道带宽**：stdout/stderr 通过 hilog 回传，单条日志约 1000 字符上限。行间加
-  微延迟避免 socket 溢出，大输出场景建议走 TCP 回传（见扩展方向）
+- **hilog 通道带宽**：stdout/stderr 通过 hilog 回传，单条日志约 1000 字符上限。流式数据每块最多 400 字节，
+  十六进制编码后发送，块间加微延迟降低 socket 溢出风险。hilog 并非可靠传输，大量输出仍可能
+  丢块；CLI 检查序号与总块数，缺块时等待至超时并报错。大输出场景建议未来扩展 TCP 回传
 - **CPU 推理正常；GPU/NPU 推理未实测**——限制在 MindSpore Lite 尚未适配鸿蒙 OS 的
   GPU/NPU 驱动（benchmark 只能走 CPU），而非 BinRunner：沙箱内二进制可 dlopen
   系统 GPU/NPU 驱动库，BinRunner 不限制驱动访问

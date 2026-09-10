@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import re
+from collections import Counter
 
 from binrunner.config import TAG
 
@@ -80,6 +81,12 @@ def parse_output(
                 started = True
             continue
 
+        if body.startswith(EXEC_MARKER):
+            continue
+
+        if body.startswith("STREAM "):
+            continue
+
         if body == END_MARKER:
             done = True
             continue
@@ -119,3 +126,51 @@ def parse_exit_code(report: str) -> int:
     """从报告中提取退出码。要求 exit= 位于行首，避免误匹配二进制自身输出。"""
     m = re.search(r"^exit=(-?\d+)", report, re.MULTILINE)
     return int(m.group(1)) if m else 0
+
+
+class StreamOutput:
+    """Decode sequenced byte chunks and deduplicate repeated hilog snapshots.
+
+    Keep incomplete/out-of-order chunks until their predecessors arrive. Sequence
+    numbers identify repeated content without dropping legitimate identical logs.
+    """
+
+    def __init__(self, run_id: str):
+        self.prefix = f"[{run_id}] "
+        self.next_sequence = 0
+        self.pending: dict[int, tuple[str, bytes]] = {}
+        self.seen: Counter[str] = Counter()
+        self.expected: int | None = None
+
+    def consume(self, output: str, emit) -> str:
+        report = []
+        occurrences: Counter[str] = Counter()
+        for line in output.splitlines():
+            match = _LINE_RE.search(line)
+            if not match or not match[1].startswith(self.prefix):
+                continue
+            body = match[1][len(self.prefix):]
+            chunk = re.fullmatch(r"STREAM (\d+) (stdout|stderr) ([0-9a-f]+)", body)
+            if chunk:
+                sequence = int(chunk[1])
+                try:
+                    payload = bytes.fromhex(chunk[3])
+                except ValueError:
+                    continue
+                if sequence >= self.next_sequence:
+                    self.pending[sequence] = (chunk[2], payload)
+                while self.next_sequence in self.pending:
+                    channel, payload = self.pending.pop(self.next_sequence)
+                    emit(channel, payload)
+                    self.next_sequence += 1
+                continue
+            summary = re.fullmatch(
+                r"<<< exit=-?\d+ timedOut=(?:true|false)(?: timeoutSec=\d+)? streamChunks=(\d+)", body
+            )
+            if summary:
+                self.expected = int(summary[1])
+            occurrences[line] += 1
+            if occurrences[line] > self.seen[line]:
+                report.append(line)
+        self.seen |= occurrences
+        return "\n".join(report)

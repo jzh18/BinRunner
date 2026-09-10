@@ -56,9 +56,9 @@ def test_execution_timeout_and_report_grace(
         lambda *a: report(exit_code, timed_out, seconds) if clock.now >= arrival else "",
     )
     assert runner.cmd_run("device", "hello", seconds) == exit_code
-    assert f"--ps timeout_sec {seconds}" in calls[1][2]
-    assert "--ps run_id a1b2c3d4" in calls[1][2]
-    assert "--ps cmd 'hello'" in calls[1][2]
+    assert f"--ps timeout_sec {seconds}" in calls[0][2]
+    assert "--ps run_id a1b2c3d4" in calls[0][2]
+    assert "--ps cmd 'hello'" in calls[0][2]
     captured = capsys.readouterr()
     assert f"exit={exit_code} timedOut={timed_out} timeoutSec={seconds}" in captured.out
     assert captured.err == ""
@@ -105,3 +105,31 @@ def test_direct_call_rejects_invalid_timeout_before_device_access(execution, val
     with pytest.raises(ValueError):
         runner.cmd_run("device", "hello", value)
     assert calls == []
+
+
+@pytest.mark.parametrize("exit_code,timed_out,arrival", [
+    (42, "false", 45),
+    (-1, "true", 1802),
+])
+def test_streaming_preserves_device_timeout_and_report_grace(
+    execution, monkeypatch, capsys, exit_code, timed_out, arrival,
+):
+    clock, calls = execution
+    prefix = "x BinRunner: [a1b2c3d4] "
+    first = prefix + ">>> exec hello args=[]\n" + prefix + "STREAM 0 stdout 68656c6c6f0a\n"
+
+    def dump(*args):
+        if clock.now < arrival:
+            return first
+        assert capsys.readouterr().out == "hello\n"
+        return first + prefix + (
+            f"<<< exit={exit_code} timedOut={timed_out} timeoutSec=1800 streamChunks=1\n"
+        )
+
+    monkeypatch.setattr(runner, "_dump_hilog", dump)
+    assert runner.cmd_run("device", "hello", 1800) == exit_code
+    assert "--ps timeout_sec 1800" in calls[0][2]
+    assert "--ps stream 1" in calls[0][2]
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert f"exit={exit_code} timedOut={timed_out} timeoutSec=1800" in captured.err
