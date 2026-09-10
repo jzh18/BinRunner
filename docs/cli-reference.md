@@ -162,6 +162,36 @@ CLI 和设备 HAP 必须同时更新。旧 v1.2.0 HAP 会忽略新参数，仍�
 
 **并发隔离**：每次执行自动生成 8 位随机 run_id，hilog 输出带 `[run_id]` 前缀，多终端互不干扰。详见 [docs/concurrency-spec.md](concurrency-spec.md)。
 
+
+#### 流式输出协议
+
+新版 CLI 启动任务时传入 `--ps stream 1`。App 将本次 `run_id` 传给 native
+工作线程；每次从 stdout/stderr 管道读到数据就发送日志，无需等待进程退出。
+Host 经过约 1 秒启动等待后，每隔 0.5 秒执行 `hilog -x`（实际延迟另加 hdc 耗时），
+收到数据立即写入对应的 stdout/stderr 并 flush。无换行片段也会显示；UTF-8 跨块增量解码。
+两个管道各自保持顺序，跨管道顺序取决于设备读取顺序。
+
+```text
+[run_id] >>> exec hello args=[]
+[run_id] STREAM 0 stdout 68656c6c6f0a
+[run_id] STREAM 1 stderr 7761726e0a
+[run_id] <<< exit=0 timedOut=false timeoutSec=60 streamChunks=2
+[run_id] <<< END
+```
+
+- 数据块使用从 0 开始、stdout/stderr 共用的递增序号，每块最多 400 原始字节，
+  十六进制编码避免换行、控制字符和日志截断破坏协议。Host 按序重组并按序号去重，
+  相同内容的不同数据块不会被误删。
+- 收齐总块数与最终状态即可结束，允许 END 丢失。结束状态写入 Host stderr，
+  不重复输出已显示的 stdout/stderr；手机 UI 仍保留完整报告。
+- hilog 可能在高吞吐量下丢失数据，不保证无损。缺块时继续轮询至 `--timeout` 加 30 秒报告预留期，
+  提示数据不完整并返回失败，超时前已经显示的输出保留。Host 超时不会取消设备任务；
+  native 执行时限由 `--timeout` 传入，Host 额外预留 30 秒用于启动和报告回传。
+- 不再清空全局 hilog 缓冲区，以免破坏其他并发会话。
+- 目标程序自身的 stdio 缓冲仍需由程序刷新：C 可用 `fflush(stdout)`，Python 可用 `-u`。
+- 需要更新并安装包含此功能的 App 才能流式输出。新版 CLI 兼容旧版 App 的完整报告；
+  旧版 CLI 未请求 `stream=1` 时，新版 App 也继续发送完整报告。`ls`、`rm` 和探测命令保留原报告形式。
+
 ---
 
 ### `br ls`
@@ -273,7 +303,7 @@ br logs                                         # 实时跟踪，显示所有 Bi
 
 | 项 | 说明 |
 |---|---|
-| hilog 带宽 | stdout/stderr 通过 hilog 回传，单条约 1000 字符上限；大输出走 TCP 回传 |
+| hilog 带宽 | stdout/stderr 通过 hilog 回传，单条约 1000 字符上限；大输出可能丢块，TCP 回传尚属扩展方向 |
 | 推送并发 | 同名文件后写覆盖，无锁 |
 | 执行环境 | 二进制以 App uid 运行，受沙箱约束；seccomp 限制部分 syscall |
 | GPU/NPU | MindSpore Lite 未适配鸿蒙 GPU/NPU 驱动，实测走 CPU；BinRunner 不限制驱动访问（沙箱内二进制可 dlopen 系统驱动库） |

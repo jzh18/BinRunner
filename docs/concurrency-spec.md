@@ -158,7 +158,7 @@ PushServer（TCP :8888）同样支持多客户端并发：
 
 | 项 | 说明 |
 |---|---|
-| 输出性能 | 所有会话共用 hilog 通道，极端并发下可能触发 socket 溢出（批量合并已大幅缓解） |
+| 输出性能 | 所有会话共用 hilog 通道，极端并发下可能触发 socket 溢出（流式块间节流可降低风险，仍可能丢块） |
 | 内存 | 每个子进程独立 fork + 匿名内存映射 ELF，内存占用与并发数线性增长 |
 | CPU | 多个二进制同时运行共享手机 CPU，无优先级调度 |
 | 最大并发 | 受限于 App 进程的 fd/内存/线程上限，实际场景远低于硬限制 |
@@ -172,3 +172,16 @@ PushServer（TCP :8888）同样支持多客户端并发：
 | [entry/src/main/ets/common/BinRunner.ets](../entry/src/main/ets/common/BinRunner.ets) | run_id 前缀注入、logLines 前缀传递 |
 | [entry/src/main/ets/common/PushServer.ets](../entry/src/main/ets/common/PushServer.ets) | TCP 多连接并发处理 |
 | [entry/src/main/cpp/napi_init.cpp](../entry/src/main/cpp/napi_init.cpp) | napi_create_async_work 工作线程执行 |
+
+
+### 流式输出补充
+
+新版 CLI 通过 `--ps stream 1` 请求流式输出。native 工作线程将 `run_id` 随异步任务保存，
+读取 stdout/stderr 时发送 `[run_id] STREAM <seq> <stdout|stderr> <hex>`，
+每次执行独立维护序号。Host 只接收自己的 ID，按序号去重并立即刷新对应输出流。
+最终报告改为退出状态与 `streamChunks` 总块数；手机 UI 仍显示完整报告。
+未请求流式模式的调用保持原行为。
+
+`br run` 不再执行全局 `hilog -r`，避免新会话清除正在执行的其他会话的数据。
+序号缺失会阻止成功完成，等待至 Host 超时后报错。hilog 仍是共享的有限缓冲通道，
+不提供可靠传输保证。详见 [流式输出协议](cli-reference.md#流式输出协议)。

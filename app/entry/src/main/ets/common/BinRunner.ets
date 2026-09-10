@@ -58,11 +58,12 @@ export class BinRunner {
 
   /**
    * 执行一条命令，例如 run('hello foo bar') 会执行 libhello.so 并传入 ['foo', 'bar']。
-   * 返回完整报告文本，同时分段写入 hilog（tag = BinRunner）。
+   * 返回完整报告供 UI 显示；流式模式实时发送管道数据，结束后仅发送状态。
    * @param runId 可选执行 ID，多终端并发时用于区分输出（CLI 自动生成）。
+   * @param streaming Host 是否请求流式协议；需同时提供 runId。
    * @param timeoutSec 设备执行期限（正 int32 秒数）；未传入时保持 30 秒。
    */
-  static async run(cmdLine: string, runId: string = '', timeoutSec: number = 30): Promise<string> {
+  static async run(cmdLine: string, runId: string = '', timeoutSec: number = 30, streaming: boolean = false): Promise<string> {
     const parts = cmdLine.split(/\s+/).filter((s) => s.length > 0)
       .map((t) => expandHome(t, BinRunner.filesDir));
     if (parts.length === 0) {
@@ -75,6 +76,7 @@ export class BinRunner {
     hilog.info(DOMAIN, TAG, '%{public}s>>> exec %{public}s args=%{public}s', prefix, name, JSON.stringify(args));
 
     let report: string;
+    let streamSummary: string = '';
     // 隐藏命令：ls [path]（默认沙箱 files 根目录，推送的二进制在 bin/ 子目录），列目录到 host CLI
     if (!Number.isInteger(timeoutSec) || timeoutSec < 1 || timeoutSec > 2147483647) {
       report = 'exit=1\ninvalid timeout_sec: expected an integer between 1 and 2147483647 seconds';
@@ -85,15 +87,18 @@ export class BinRunner {
       report = BinRunner.removePath(args[0] ?? '');
     } else {
       try {
-        const r: RunResult = await runBin(BinRunner.binDir, name, args, timeoutSec, BinRunner.filesBinDir);
+        const r: RunResult = await runBin(BinRunner.binDir, name, args, timeoutSec, BinRunner.filesBinDir, streaming ? runId : '');
         report = `exit=${r.exitCode} timedOut=${r.timedOut} timeoutSec=${timeoutSec}\n` +
           `--- stdout ---\n${r.stdout}\n--- stderr ---\n${r.stderr}`;
+        if (r.streamChunks >= 0) {
+          streamSummary = `exit=${r.exitCode} timedOut=${r.timedOut} timeoutSec=${timeoutSec} streamChunks=${r.streamChunks}`;
+        }
       } catch (e) {
         report = `native call failed: ${JSON.stringify(e)}`;
       }
     }
 
-    await logLines(prefix + '<<<', report);
+    await logLines(prefix + '<<<', streamSummary.length > 0 ? streamSummary : report);
     // 结束标记：host CLI 以此判定报告输出完毕（不再需要 idle 超时猜测）
     hilog.info(DOMAIN, TAG, '%{public}s<<< END', prefix);
     return report;

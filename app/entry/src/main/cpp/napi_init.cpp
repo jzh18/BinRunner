@@ -31,6 +31,7 @@ struct ExecResult {
     bool timedOut = false;
     std::string out;
     std::string err;
+    int streamChunks = -1; // -1: legacy report; otherwise number of streamed chunks
 };
 
 long long NowMs()
@@ -217,11 +218,34 @@ static void RunInMemory(const std::string &path, const std::vector<std::string> 
     // 不应到达
 }
 
+// Hex preserves newlines, NULs and UTF-8 split across reads without hilog continuation lines.
+static void LogStream(const std::string &runId, int &sequence, const char *channel,
+                      const char *bytes, size_t size)
+{
+    if (runId.empty()) {
+        return;
+    }
+    const char *hex = "0123456789abcdef";
+    for (size_t offset = 0; offset < size;) {
+        std::string encoded;
+        for (size_t n = 0; n < 400 && offset < size; ++n, ++offset) {
+            unsigned char c = static_cast<unsigned char>(bytes[offset]);
+            encoded += hex[c >> 4];
+            encoded += hex[c & 15];
+        }
+        OH_LOG_INFO(LOG_APP, "[%{public}s] STREAM %{public}d %{public}s %{public}s",
+                    runId.c_str(), sequence++, channel, encoded.c_str());
+        usleep(2000); // Pace bursts to reduce hilog socket overflow.
+    }
+}
+
 // 执行指定二进制，捕获 stdout/stderr，超时强杀。
 ExecResult ExecBinary(const std::string &binDir, const std::string &filesBinDir,
-                      const std::string &name, const std::vector<std::string> &args, int timeoutSec)
+                      const std::string &name, const std::vector<std::string> &args, int timeoutSec,
+                      const std::string &runId)
 {
     ExecResult res;
+    int sequence = 0;
     std::string resolveErr;
     const std::string path = ResolveExecPath(binDir, filesBinDir, name, resolveErr);
     if (path.empty()) {
@@ -346,14 +370,20 @@ ExecResult ExecBinary(const std::string &binDir, const std::string &filesBinDir,
                 ssize_t r = read(fds[i].fd, buf, sizeof(buf));
                 if (r > 0) {
                     (i == 0 ? res.out : res.err).append(buf, r);
+                    LogStream(runId, sequence, i == 0 ? "stdout" : "stderr", buf, r);
                 } else if (r == 0 || (r < 0 && errno != EAGAIN && errno != EINTR)) {
                     close(fds[i].fd);
                     openFd[i] = false;
+                    fds[i].fd = -1;
                 }
             }
         }
     }
 
+    for (int i = 0; i < 2; ++i) {
+        if (openFd[i]) close(fds[i].fd);
+    }
+    if (!runId.empty()) res.streamChunks = sequence;
     int status = 0;
     waitpid(pid, &status, 0);
     if (res.timedOut) {
@@ -393,6 +423,8 @@ static napi_value BuildResultObject(napi_env env, const ExecResult &r)
     napi_set_named_property(env, result, "stdout", v);
     napi_create_string_utf8(env, r.err.c_str(), r.err.size(), &v);
     napi_set_named_property(env, result, "stderr", v);
+    napi_create_int32(env, r.streamChunks, &v);
+    napi_set_named_property(env, result, "streamChunks", v);
     return result;
 }
 
@@ -403,6 +435,7 @@ struct RunBinAsyncData {
     std::vector<std::string> args;
     int32_t timeoutSec;
     std::string filesBinDir;
+    std::string runId;
     ExecResult result;
     napi_deferred deferred;
     napi_async_work work;
@@ -411,7 +444,13 @@ struct RunBinAsyncData {
 static void RunBinExecute(napi_env /*env*/, void *data)
 {
     auto *d = static_cast<RunBinAsyncData *>(data);
-    d->result = ExecBinary(d->binDir, d->filesBinDir, d->name, d->args, d->timeoutSec);
+    d->result = ExecBinary(d->binDir, d->filesBinDir, d->name, d->args, d->timeoutSec, d->runId);
+    // Startup failures return before the pipe loop; stream their diagnostics too.
+    if (!d->runId.empty() && d->result.streamChunks < 0) {
+        d->result.streamChunks = 0;
+        LogStream(d->runId, d->result.streamChunks, "stderr",
+                  d->result.err.data(), d->result.err.size());
+    }
 }
 
 static void RunBinComplete(napi_env env, napi_status /*status*/, void *data)
@@ -423,7 +462,7 @@ static void RunBinComplete(napi_env env, napi_status /*status*/, void *data)
     delete d;
 }
 
-// runBin(binDir: string, name: string, args: string[], timeoutSec: number, filesBinDir?: string)
+// runBin(binDir: string, name: string, args: string[], timeoutSec: number, filesBinDir?: string, runId?: string)
 //   => Promise<{ exitCode: number, timedOut: boolean, stdout: string, stderr: string }>
 // filesBinDir：PushServer 接收目录（filesDir/bin），免打包推送的二进制/依赖库放这里，可省略
 //
@@ -431,8 +470,8 @@ static void RunBinComplete(napi_env env, napi_status /*status*/, void *data)
 // probe / probe2 调试命令仍为同步（瞬时完成）。
 napi_value RunBin(napi_env env, napi_callback_info info)
 {
-    size_t argc = 5;
-    napi_value argv[5] = {nullptr};
+    size_t argc = 6;
+    napi_value argv[6] = {nullptr};
     napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
     if (argc < 4) {
         napi_throw_error(env, nullptr, "runBin requires (binDir, name, args, timeoutSec[, filesBinDir])");
@@ -458,6 +497,8 @@ napi_value RunBin(napi_env env, napi_callback_info info)
     if (argc >= 5 && argv[4] != nullptr) {
         filesBinDir = GetString(env, argv[4]);
     }
+
+    std::string runId = argc >= 6 ? GetString(env, argv[5]) : "";
 
     OH_LOG_INFO(LOG_APP, "exec lib%{public}s.so argc=%{public}zu", name.c_str(), args.size());
 
@@ -507,7 +548,7 @@ napi_value RunBin(napi_env env, napi_callback_info info)
     // 正常执行：异步 Promise，不阻塞 UI 线程
     auto *data = new RunBinAsyncData{
         std::move(binDir), std::move(name), std::move(args),
-        timeoutSec, std::move(filesBinDir), ExecResult{}, nullptr, nullptr,
+        timeoutSec, std::move(filesBinDir), std::move(runId), ExecResult{}, nullptr, nullptr,
     };
 
     napi_value promise = nullptr;

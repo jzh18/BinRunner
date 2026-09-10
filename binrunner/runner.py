@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import codecs
 import random
 import subprocess
 import sys
@@ -14,7 +15,7 @@ import time
 
 from binrunner.config import ABILITY, BUNDLE, TAG
 from binrunner.hdc import hdc_cmd, run_hdc
-from binrunner.hilog import parse_exit_code, parse_output, report_is_complete
+from binrunner.hilog import StreamOutput, parse_exit_code, parse_output, report_is_complete
 
 # App 冷启动 + 设备侧 300ms setTimeout + 命令执行的预留时间
 _STARTUP_WAIT = 1.0
@@ -42,24 +43,31 @@ def _dump_hilog(udid: str, timeout: float) -> str:
 
 
 def cmd_run(udid: str, cmdline: str, timeout: int) -> int:
-    """执行期限为 timeout 秒；主机另留报告回传时间，返回目标退出码。"""
+    """在设备上执行命令，实时转发输出并返回目标二进制的退出码。"""
     if not isinstance(timeout, int) or isinstance(timeout, bool) or not 1 <= timeout <= 2147483647:
         raise ValueError("执行超时必须为 1–2147483647 的整数秒")
     run_id = new_run_id()
 
-    # 清掉旧日志，避免上次执行的报告混入（失败无妨，>>> exec 标记会兜底）
-    run_hdc(udid, "shell", "hilog -r", check=False)
+    # run_id 隔离旧日志；不要清空其他并发任务的日志。
     run_hdc(
         udid,
         "shell",
-        f"aa start -b {BUNDLE} -a {ABILITY} --ps run_id {run_id} "
-        f"--ps timeout_sec {timeout} --ps cmd '{cmdline}'",
+        f"aa start -b {BUNDLE} -a {ABILITY} --ps run_id {run_id} --ps stream 1 --ps timeout_sec {timeout} --ps cmd '{cmdline}'",
     )
 
     started = False
     done = False
     report_lines: list[str] = []
     parts: dict[int, str] = {}  # 超长行的 [i/n] 分段缓存，跨轮次复用
+
+    stream = StreamOutput(run_id)
+    decoders = {name: codecs.getincrementaldecoder("utf-8")("replace")
+                for name in ("stdout", "stderr")}
+
+    def emit(channel: str, payload: bytes, final: bool = False) -> None:
+        target = sys.stdout if channel == "stdout" else sys.stderr
+        target.write(decoders[channel].decode(payload, final=final))
+        target.flush()
 
     wait_timeout = timeout + _REPORT_GRACE
     deadline = time.monotonic() + wait_timeout
@@ -68,6 +76,11 @@ def cmd_run(udid: str, cmdline: str, timeout: int) -> int:
     while not done:
         remain = deadline - time.monotonic()
         if remain <= 0:
+            for channel in decoders:
+                emit(channel, b"", final=True)
+            if stream.expected is not None:
+                print(f"[binrunner] 输出数据不完整（收到连续 {stream.next_sequence}/"
+                      f"{stream.expected} 块）", file=sys.stderr)
             print(
                 f"[binrunner] 等待执行报告超时（{wait_timeout}s；设备执行期限 {timeout}s，"
                 f"启动和报告预留 {_REPORT_GRACE}s），设备是否已结束未知",
@@ -79,8 +92,19 @@ def cmd_run(udid: str, cmdline: str, timeout: int) -> int:
             output = _dump_hilog(udid, min(remain, _MAX_POLL_TIMEOUT))
         except subprocess.TimeoutExpired:
             continue
+        output = stream.consume(output, emit)
+        # Sequenced records already identify this run even if the start log was lost.
+        started = started or stream.next_sequence > 0 or stream.expected is not None
         started, done = parse_output(output, started, report_lines, parts, run_id)
-        if done:
+        if stream.expected is not None:
+            # Summary is emitted after all pipe chunks, and also survives a lost END.
+            if stream.next_sequence == stream.expected:
+                break
+            done = False
+        elif stream.next_sequence or stream.pending:
+            # END alone cannot replace the exit status / total chunk count.
+            done = False
+        elif done:
             break
         # <<< END 可能被 hilog socket 丢弃 → 用报告结构完整性兜底
         if started and report_is_complete(report_lines):
@@ -93,8 +117,12 @@ def cmd_run(udid: str, cmdline: str, timeout: int) -> int:
         )
         return 1
 
+    for channel in decoders:
+        emit(channel, b"", final=True)
     report = "\n".join(report_lines)
-    print(report)
+    # Keep execution metadata separate from the program's stdout.
+    print(report, file=sys.stderr if stream.expected is not None else sys.stdout,
+          flush=True)
     return parse_exit_code(report)
 
 

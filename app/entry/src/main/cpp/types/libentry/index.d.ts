@@ -3,6 +3,7 @@ export interface RunResult {
   timedOut: boolean;
   stdout: string;
   stderr: string;
+  streamChunks: number; // -1: 完整报告；>=0: 已发送的流式数据块数
 }
 
 /**
@@ -15,5 +16,6 @@ export interface RunResult {
  * @param args        参数列表
  * @param timeoutSec  超时秒数，超时后 SIGKILL
  * @param filesBinDir PushServer 接收目录（filesDir + '/bin'），推送二进制及其 .so 依赖放这里，可省略
+ * @param runId      非空时通过 hilog 实时发送带序号的 stdout/stderr 字节块
  */
-export const runBin: (binDir: string, name: string, args: string[], timeoutSec: number, filesBinDir?: string) => Promise<RunResult>;
+export const runBin: (binDir: string, name: string, args: string[], timeoutSec: number, filesBinDir?: string, runId?: string) => Promise<RunResult>;
